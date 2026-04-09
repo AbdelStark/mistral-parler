@@ -14,6 +14,8 @@ from ..attribution.attributor import SpeakerAttributor
 from ..audio.ingester import AudioIngester
 from ..config import ParlerConfig
 from ..errors import ProcessingError
+from ..extraction.cache import ExtractionCache
+from ..extraction.extractor import DecisionExtractor
 from ..models import (
     AudioFile,
     Commitment,
@@ -30,17 +32,6 @@ from ..rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
 from ..transcription.cache import TranscriptCache
 from ..transcription.transcriber import VoxtralTranscriber
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
-
-
-class DecisionExtractor:
-    def extract(
-        self,
-        transcript: Transcript,
-        *,
-        meeting_date: date | None = None,
-        participants: list[str] | None = None,
-    ) -> DecisionLog:  # pragma: no cover - implementation follows later
-        raise NotImplementedError("DecisionExtractor is not implemented yet")
 
 
 def estimate_cost(audio_file: AudioFile, config: ParlerConfig) -> float:
@@ -149,7 +140,11 @@ def _decision_log_from_dict(data: dict[str, Any]) -> DecisionLog:
                 deadline=(
                     CommitmentDeadline(
                         raw=item["deadline"]["raw"],
-                        resolved_date=None,
+                        resolved_date=(
+                            date.fromisoformat(item["deadline"]["resolved_date"])
+                            if item["deadline"].get("resolved_date")
+                            else None
+                        ),
                         is_explicit=item["deadline"]["is_explicit"],
                     )
                     if item.get("deadline")
@@ -354,7 +349,18 @@ class PipelineOrchestrator:
 
         if PipelineStage.EXTRACT not in state.completed_stages:
             assert working_transcript is not None
-            extractor = DecisionExtractor()
+            extraction_cache = None
+            if self.config.cache.enabled:
+                extraction_cache = ExtractionCache(cache_dir=self.config.cache.directory)
+            extractor = DecisionExtractor(
+                api_key=self.config.api_key,
+                model=self.config.extraction.model,
+                prompt_version=self.config.extraction.prompt_version,
+                temperature=self.config.extraction.temperature,
+                max_tokens=self.config.extraction.max_tokens,
+                multi_pass_threshold=self.config.extraction.multi_pass_threshold,
+                cache=extraction_cache,
+            )
             decision_log = self._run_stage(
                 PipelineStage.EXTRACT,
                 lambda: extractor.extract(

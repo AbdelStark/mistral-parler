@@ -71,7 +71,7 @@
 </state_machine>
 
 <parallel_execution>
-  Safe to parallelize after Phase 1-4 local foundations are stable:
+  Safe to parallelize after Phase 1-5 local foundations are stable:
   - `parler/audio/*` vs `parler/rendering/*`
   - `parler/attribution/*` vs future `parler/extraction/*`
   - `parler/export/*` adapters in separate files
@@ -80,6 +80,7 @@
 
   Must serialize:
   - `parler/models.py`, `parler/config.py`, `parler/errors.py`
+  - `parler/extraction/deadline_resolver.py` while deadline semantics are still under reconciliation
   - `tests/conftest.py`
   - `SPEC.md`, `SDD.md`, `TESTING.md`, `pyproject.toml`
   - checkpoint schema, cache key builders, and CLI surface changes

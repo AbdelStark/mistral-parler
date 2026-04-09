@@ -35,9 +35,10 @@ Lower-priority recommended skills not scaffolded yet:
 
 ## Known Baseline Risks
 
-- Phase 1 through Phase 4 exist, but later domains are still missing: decision extraction, exports, and the broader CLI/report flows built on top of them.
+- Phase 1 through Phase 5 exist in the runtime package. The main remaining later domain is exports plus the broader CLI/report flows built on top of the canonical `DecisionLog`.
 - E2E fixture assets listed in `tests/fixtures/README.md` are not committed yet.
 - Tests and docs still drift on module names: `assembly` vs `assembler` and `util` vs `utils`; `attribution` vs `transcription.attributor` is now covered by a compatibility shim.
+- Deadline semantics still have one localized contract drift: three tests assume the wrong weekday for `2026-04-09`; the broader parametrized/property suite is internally consistent and should drive implementation.
 - `PipelineConfig` compatibility is currently provided by aliasing `ParlerConfig`.
 - `uv`, `uv_build`, `PyYAML`, and `requests` are now declared and validated; keep future tooling changes inside the same packaging model.
-- CI intentionally validates only the implemented Phase 1-4 slice; widen it only when later domains are actually delivered.
+- CI intentionally validates only the implemented Phase 1-4 public slice today; widen it only after deciding how to handle the deadline-test drift in Phase 5.
