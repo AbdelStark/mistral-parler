@@ -1,147 +1,255 @@
-Feature: Decision extraction
-  As a meeting participant who needs to track outcomes
-  I want parler to accurately extract decisions, commitments, rejections, and open questions
-  So that I have a structured record of what was agreed without reading a full transcript
+Feature: Decision and commitment extraction
+  As a meeting participant
+  I want parler to extract decisions, commitments, rejections, and open questions
+  So that I have a structured, actionable record of what was decided and who owns what
 
   Background:
-    Given a valid MISTRAL_API_KEY is configured
-    And a transcript is available for extraction
+    Given the Mistral extraction API is mocked
+    And the meeting date is 2026-04-09
+    And the extraction model is "mistral-large-latest"
 
   # ─── Decisions ──────────────────────────────────────────────────────────────
 
   @smoke
-  Scenario: Explicit decision extracted correctly
-    Given a transcript containing: "We've decided to launch on May 15th. That's the date."
-    When I run decision extraction on the transcript
-    Then exactly one Decision is extracted
-    And the Decision summary contains "May 15" or "launch"
-    And the Decision confidence is "high"
-    And the Decision quote contains the original sentence
+  Scenario: Explicit decision with speaker confirmation is extracted
+    Given a French transcript containing:
+      """
+      Pierre: On part sur le 15 mai pour le lancement, c'est décidé.
+      Sophie: D'accord, je note : lancement le 15 mai.
+      """
+    When extraction runs
+    Then the decision log contains 1 decision
+    And decision D1 has summary containing "15 mai" or "May 15"
+    And decision D1 has speaker "Pierre"
+    And decision D1 has confirmed_by including "Sophie"
+    And decision D1 has confidence "high"
+    And decision D1 has language "fr"
 
-  Scenario: Discussion is not extracted as a decision
-    Given a transcript containing: "We should probably think about moving the launch date."
-    When I run decision extraction on the transcript
-    Then no Decision is extracted for the launch date topic
-    # "should probably think about" is exploration, not a decision
+  Scenario: Statement of fact is NOT extracted as a decision
+    Given a French transcript containing:
+      """
+      Sophie: Le projet est en retard de deux semaines.
+      Pierre: Les résultats du Q3 sont dans ce document.
+      """
+    When extraction runs
+    Then the decision log contains 0 decisions
+    And the decision log contains 0 commitments
 
-  Scenario: Implicit consensus decision extracted with medium confidence
-    Given a transcript containing: "So that means we'll go with option B then, right?"
-    And the response is: "Yes, let's do that."
-    When I run decision extraction on the transcript
-    Then a Decision is extracted with confidence "medium"
-    And the Decision summary mentions "option B"
+  Scenario: Implicit consensus is extracted as a decision
+    Given a French transcript containing:
+      """
+      Pierre: Donc on s'aligne sur la date du 20 avril ?
+      Sophie: Oui, tout à fait.
+      Marc: Parfait pour moi.
+      """
+    When extraction runs
+    Then the decision log contains 1 decision
+    And decision D1 has confidence "high" or "medium"
 
-  Scenario: Decision confirmed by multiple speakers has higher credibility
-    Given a transcript where Pierre says "On part sur Mistral Small"
-    And Sophie responds "Oui, je suis d'accord"
-    And Marc says "Parfait pour moi"
-    When I run decision extraction
-    Then a Decision is extracted with confirmed_by containing "Sophie" and "Marc"
-
-  Scenario: Decision reversed later in meeting is not included
-    Given a transcript where at 10:00 "We decided to use GPT-4"
-    And at 35:00 "Actually we're switching to Mistral Large, not GPT-4"
-    When I run decision extraction
-    Then no Decision mentioning "GPT-4" is in the final decision log
-    And a Decision mentioning "Mistral Large" is present
+  Scenario: A decision reversed later in the meeting is not extracted
+    Given a French transcript containing:
+      """
+      Pierre: On lance en mars.
+      [...]
+      Sophie: Finalement, le lancement en mars est annulé. On repousse à mai.
+      Pierre: D'accord, c'est officiel — lancement en mai.
+      """
+    When extraction runs
+    Then the decision log contains 0 decisions about "mars"
+    And the decision log contains 1 decision about "mai"
 
   # ─── Commitments ────────────────────────────────────────────────────────────
 
   @smoke
-  Scenario: Explicit commitment with owner and deadline extracted
-    Given a transcript containing: "Sophie, can you review the checklist by Friday?"
-    And Sophie responds: "Yes, I'll have it done by Friday."
-    When I run decision extraction
-    Then a Commitment is extracted with owner "Sophie"
-    And the Commitment action contains "checklist" or "review"
-    And the Commitment deadline raw contains "Friday"
+  Scenario: Explicit commitment with relative deadline is extracted and resolved
+    Given a French transcript containing:
+      """
+      Sophie: Je vais revoir la checklist de déploiement avant vendredi prochain.
+      """
+    When extraction runs with meeting_date=2026-04-09
+    Then the decision log contains 1 commitment
+    And commitment C1 has owner "Sophie"
+    And commitment C1 has action containing "checklist"
+    And commitment C1 has deadline.raw "vendredi prochain"
+    And commitment C1 has deadline.resolved_date 2026-04-17
+    And commitment C1 has deadline.is_explicit false
 
-  Scenario: Commitment without explicit deadline extracted with null deadline
-    Given a transcript containing: "I'll handle the legal review."
-    When I run decision extraction
-    Then a Commitment is extracted
-    And the Commitment deadline is null
-    And the Commitment confidence is "medium" (no deadline = lower commitment signal)
+  Scenario Outline: Deadline resolution for various French and English patterns
+    Given a transcript containing a commitment with deadline phrase "<phrase>"
+    When extraction runs with meeting_date=<anchor>
+    Then the commitment has deadline.resolved_date <expected_date>
+    And the commitment has deadline.is_explicit <is_explicit>
 
-  Scenario: Relative deadline resolved to absolute date
-    Given today's date is 2026-04-09 (Wednesday)
-    And a transcript containing: "I'll have it done by next Friday"
-    When I run decision extraction with meeting_date=2026-04-09
-    Then a Commitment is extracted
-    And the Commitment deadline resolved_date is "2026-04-17"
-    And the Commitment deadline is_explicit is False
+    Examples:
+      | phrase                  | anchor     | expected_date | is_explicit |
+      | vendredi prochain       | 2026-04-09 | 2026-04-17    | false       |
+      | demain                  | 2026-04-09 | 2026-04-10    | false       |
+      | la semaine prochaine    | 2026-04-09 | 2026-04-13    | false       |
+      | fin du mois             | 2026-04-09 | 2026-04-30    | false       |
+      | next Friday             | 2026-04-09 | 2026-04-17    | false       |
+      | by end of week          | 2026-04-09 | 2026-04-11    | false       |
+      | end of month            | 2026-04-09 | 2026-04-30    | false       |
+      | 14 avril                | 2026-04-09 | 2026-04-14    | true        |
+      | avant le 17 avril       | 2026-04-09 | 2026-04-17    | true        |
+      | 2026-04-20              | 2026-04-09 | 2026-04-20    | true        |
+      | April 20th              | 2026-04-09 | 2026-04-20    | true        |
+      | le 20                   | 2026-04-09 | 2026-04-20    | true        |
+      | le 5                    | 2026-04-09 | 2026-05-05    | true        |
+      | bientôt                 | 2026-04-09 | null          | false       |
+      | dès que possible        | 2026-04-09 | null          | false       |
+      | sometime soon           | 2026-04-09 | null          | false       |
 
-  Scenario: Explicit date deadline resolved correctly
-    Given a transcript containing: "Submit the proposal by April 14th"
-    And the meeting year is 2026
-    When I run decision extraction
-    Then a Commitment is extracted
-    And the Commitment deadline resolved_date is "2026-04-14"
-    And the Commitment deadline is_explicit is True
+  Scenario: Commitment without explicit owner defaults to Unknown
+    Given a transcript containing:
+      """
+      Il faudra envoyer le rapport avant vendredi.
+      """
+    When extraction runs
+    Then the decision log contains 1 commitment
+    And commitment C1 has owner "Unknown"
 
-  Scenario: French relative deadline resolved
-    Given today's date is 2026-04-09
-    And a transcript containing: "Je ferai ça vendredi prochain"
-    When I run decision extraction with meeting_date=2026-04-09
-    Then a Commitment is extracted
-    And the Commitment deadline resolved_date is "2026-04-17"
+  Scenario: Commitment with implicit owner resolved via participant list
+    Given a transcript containing:
+      """
+      Pierre demande à Sophie d'envoyer le rapport.
+      """
+    And the participant list is ["Pierre", "Sophie"]
+    When extraction runs
+    Then commitment C1 has owner "Sophie"
 
   # ─── Rejections ─────────────────────────────────────────────────────────────
 
+  Scenario: Explicitly rejected proposal is captured in rejected list
+    Given a French transcript containing:
+      """
+      Pierre: Je propose qu'on lance en mars.
+      Sophie: Non, c'est impossible. On n'a pas les ressources.
+      Pierre: D'accord, on oublie mars.
+      """
+    When extraction runs
+    Then the decision log contains 1 rejected item
+    And rejected item R1 has summary containing "mars"
+
+  Scenario: Declined proposal without consensus is not a rejection
+    Given a French transcript containing:
+      """
+      Pierre: On pourrait peut-être lancer en mars ?
+      Sophie: Je ne sais pas... c'est compliqué.
+      """
+    When extraction runs
+    Then the decision log contains 0 rejected items
+
+  # ─── Open questions ──────────────────────────────────────────────────────────
+
+  Scenario: Unanswered question is captured as open question
+    Given a French transcript containing:
+      """
+      Pierre: Qui s'occupe de la migration de la base de données ?
+      [silence]
+      Pierre: On verra ça plus tard.
+      """
+    When extraction runs
+    Then the decision log contains 1 open question
+    And open question Q1 has question containing "migration"
+
+  Scenario: Answered question is NOT extracted as open question
+    Given a French transcript containing:
+      """
+      Pierre: Qui s'occupe de la migration ?
+      Sophie: C'est moi, je le ferai vendredi.
+      """
+    When extraction runs
+    Then the decision log contains 0 open questions
+    And the decision log contains 1 commitment
+
+  # ─── Edge cases ─────────────────────────────────────────────────────────────
+
   @smoke
-  Scenario: Explicit rejection with reason extracted
-    Given a transcript containing: "We won't migrate to GPT-4o — the cost and US dependency are unacceptable."
-    When I run decision extraction
-    Then a Rejection is extracted with proposal containing "GPT-4o"
-    And the Rejection reason mentions cost or dependency
-    And the Rejection confidence is "high"
-
-  Scenario: Soft rejection is not extracted as a hard rejection
-    Given a transcript containing: "I'm not sure GPT-4o is the right choice here..."
-    When I run decision extraction
-    Then no Rejection is extracted for "GPT-4o"
-    # Uncertainty is not a rejection
-
-  Scenario: Deferred item not extracted as rejection
-    Given a transcript containing: "Let's table the open-source discussion for next sprint."
-    When I run decision extraction
-    Then no Rejection is extracted
-    And an OpenQuestion may be extracted if the topic is clearly unresolved
-
-  # ─── Open questions ─────────────────────────────────────────────────────────
-
-  @smoke
-  Scenario: Unresolved question with stakes extracted
-    Given a transcript containing: "We still don't know who handles legal review, and it blocks the launch."
-    When I run decision extraction
-    Then an OpenQuestion is extracted
-    And the OpenQuestion question mentions "legal review"
-    And the OpenQuestion stakes mentions "launch" or "blocks"
-
-  Scenario: Resolved question not extracted as open
-    Given a transcript containing: "Who owns the budget? — Marc does."
-    When I run decision extraction
-    Then no OpenQuestion is extracted for "budget ownership"
-
-  # ─── Empty and edge cases ───────────────────────────────────────────────────
-
-  Scenario: Empty transcript produces empty decision log
-    Given a transcript containing only: "[silence] [inaudible]"
-    When I run decision extraction
-    Then the decision log has zero items
+  Scenario: Empty transcript produces an empty log
+    Given an empty transcript
+    When extraction runs
+    Then the decision log is empty
     And the command exits with code 0
-    And a warning is printed: "No decisions found in transcript"
 
-  Scenario: Multi-pass extraction for very long transcript
-    Given a transcript of approximately 30,000 words (about 120 minutes of speech)
-    When I run decision extraction
-    Then multi-pass extraction is used (2+ Mistral calls)
-    And no duplicate decisions appear in the final log
-    And decisions from early in the meeting are included alongside decisions from later
+  Scenario: Very long transcript triggers multi-pass extraction
+    Given a transcript with more than 25000 words
+    When extraction runs
+    Then at least 2 extraction API calls are made
+    And the results from all passes are merged and deduplicated
 
-  Scenario: Partial JSON response from Mistral handled gracefully
-    Given the Mistral API returns a malformed JSON for extraction
-    When I run decision extraction
-    Then a warning is printed: "Could not fully parse extraction response"
-    And any valid fields from the partial response are included
-    And the command exits with code 0 (partial results, not failure)
+  Scenario: Partially valid JSON response from LLM is handled gracefully
+    Given the extraction API returns malformed JSON on the first attempt
+    And returns valid JSON on the second attempt
+    When extraction runs
+    Then extraction completes successfully
+    And exactly 2 API calls were made
+
+  Scenario: Low confidence items excluded from output
+    Given a transcript where the LLM returns a decision with confidence "low"
+    When extraction runs
+    Then the decision log contains 0 decisions
+
+  # ─── Confidence normalization ────────────────────────────────────────────────
+
+  Scenario Outline: Confidence values are normalized to valid set
+    Given a transcript where the LLM returns confidence "<raw_confidence>"
+    When extraction runs
+    Then the extracted item has confidence "<normalized>"
+
+    Examples:
+      | raw_confidence | normalized |
+      | high           | high       |
+      | medium         | medium     |
+      | low            | [DROPPED]  |
+      | very_high      | medium     |
+      | 0.9            | medium     |
+      | HIGH           | high       |
+      | MEDIUM         | medium     |
+      |                | medium     |
+      | null           | medium     |
+
+  # ─── Language normalization ──────────────────────────────────────────────────
+
+  Scenario Outline: Language codes are normalized to ISO 639-1 lowercase
+    Given a transcript where the LLM returns language "<raw_lang>"
+    When extraction runs
+    Then the extracted item has language "<normalized_lang>"
+
+    Examples:
+      | raw_lang | normalized_lang |
+      | fr       | fr              |
+      | en       | en              |
+      | FR       | fr              |
+      | French   | fr              |
+      | FRENCH   | fr              |
+      | english  | en              |
+      | English  | en              |
+      | de       | de              |
+      | unknown  | fr              |
+      |          | fr              |
+
+  # ─── ID assignment ────────────────────────────────────────────────────────────
+
+  Scenario: Items without IDs get auto-assigned IDs in order
+    Given a transcript with 3 decisions, none with explicit IDs
+    When extraction runs
+    Then the decisions have IDs "D1", "D2", "D3" in order
+
+  Scenario: Duplicate IDs from the LLM are renumbered
+    Given a transcript where the LLM returns two decisions both with id "D1"
+    When extraction runs
+    Then the decision log contains 2 decisions
+    And all decision IDs are unique
+
+  # ─── Quote validation ──────────────────────────────────────────────────────
+
+  Scenario: Empty quote is accepted with a warning in logs
+    Given a transcript where the LLM returns a decision with an empty quote
+    When extraction runs
+    Then the decision log contains 1 decision
+    And a warning is logged containing "empty quote"
+
+  Scenario: Quote longer than 500 characters is truncated
+    Given a transcript where the LLM returns a decision with a 600-character quote
+    When extraction runs
+    Then the decision quote is at most 503 characters long

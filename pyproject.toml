@@ -1,0 +1,191 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "parler"
+version = "0.1.0"
+description = "Meeting intelligence: multilingual transcription, decision extraction, and report generation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["mistral", "voxtral", "transcription", "meeting", "nlp"]
+authors = [{ name = "Abdel", email = "abdel@noreply.github.com" }]
+
+dependencies = [
+    "mistralai>=1.0.0",
+    "pydantic>=2.0",
+    "rich>=13.0",
+    "jinja2>=3.1",
+    "tomli>=2.0; python_version < '3.11'",
+    "python-dateutil>=2.8",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.5",      # parallel test execution
+    "pytest-bdd>=7.0",        # BDD / Gherkin
+    "pytest-asyncio>=0.23",   # async tests
+    "pytest-benchmark>=4.0",  # performance benchmarks
+    "hypothesis>=6.100",      # property-based testing
+    "freezegun>=1.4",         # deterministic time in tests
+    "respx>=0.20",            # HTTP mock for httpx
+    "factory-boy>=3.3",       # fixture factories
+    "mutmut>=2.4",            # mutation testing
+    "ruff>=0.4",              # linting
+    "mypy>=1.9",              # type checking
+    "pyright>=1.1",           # type checking (strict)
+]
+diarize = [
+    "pyannote.audio>=3.1",   # speaker diarisation (optional)
+]
+
+[project.scripts]
+parler = "parler.cli:main"
+
+# ─── pytest ──────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests", "features"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Custom markers — must be declared here to avoid PytestUnknownMarkWarning
+markers = [
+    "slow: marks tests as slow (real API calls) — deselect with -m 'not slow'",
+    "smoke: critical path tests, always run in CI",
+    "fr: French-language specific tests",
+    "multilingual: tests requiring multilingual logic",
+    "benchmark: performance benchmark tests",
+    "property: property-based tests (Hypothesis)",
+    "integration: tests that mock external APIs",
+    "e2e: end-to-end tests against real APIs",
+    "unit: pure function tests, no I/O",
+]
+
+# Default: run unit + integration, exclude slow E2E and benchmarks
+addopts = [
+    "--strict-markers",          # fail if unknown marker used
+    "--strict-config",           # fail on config warnings
+    "-ra",                       # show short test summary for all except passed
+    "--tb=short",                # shorter tracebacks
+    "--import-mode=importlib",   # reliable imports without __init__.py games
+]
+
+# asyncio mode for async tests
+asyncio_mode = "auto"
+
+# ─── Coverage ────────────────────────────────────────────────────────────────
+
+[tool.coverage.run]
+source = ["parler"]
+branch = true
+omit = [
+    "parler/__main__.py",
+    "tests/*",
+    "features/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 1
+fail_under = 90
+
+[tool.coverage.paths]
+source = ["parler", "*/site-packages/parler"]
+
+# Per-module coverage targets (enforced in CI via coverage.xml parsing)
+# See .github/workflows/test.yml
+# parler.audio.ingester:          line=95, branch=90
+# parler.transcription.*:         line=90, branch=85
+# parler.extraction.extractor:    line=95, branch=90
+# parler.extraction.deadline_resolver: line=98, branch=95
+# parler.rendering.renderer:      line=90, branch=85
+# parler.pipeline.orchestrator:   line=85, branch=80
+# parler.cli:                     line=85, branch=75
+
+# ─── Hypothesis ──────────────────────────────────────────────────────────────
+
+[tool.hypothesis]
+max_examples = 200          # more thorough than default 100
+deadline = 5000             # ms — generous for CI
+suppress_health_check = ["too_slow"]
+deriving_strategies = "best"
+database = ".hypothesis"
+
+# ─── Ruff (linting) ──────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["parler", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "C4",       # flake8-comprehensions
+    "SIM",      # flake8-simplify
+    "TCH",      # flake8-type-checking
+    "PTH",      # flake8-use-pathlib
+    "RUF",      # ruff-specific
+]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # do not perform function calls in default arguments (Click)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]  # allow assert, hardcoded passwords in tests
+
+# ─── Mypy ────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "features.*"]
+disallow_untyped_defs = false
+strict = false
+
+# ─── Mutmut (mutation testing) ───────────────────────────────────────────────
+
+[tool.mutmut]
+paths_to_mutate = "parler/"
+backup = false
+runner = "python -m pytest tests/unit/ -x -q --tb=no"
+tests_dir = "tests/unit/"
+# Target mutation score ≥ 80% for core modules
+
+# ─── Hatch (project management) ──────────────────────────────────────────────
+
+[tool.hatch.envs.default]
+dependencies = ["parler[dev]"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest tests/unit tests/integration features/ -v --cov=parler --cov-report=term-missing"
+test-fast = "pytest tests/unit/ -v -x"
+test-all = "pytest -v --cov=parler"
+test-e2e = "pytest tests/e2e/ -v -s"
+test-props = "pytest tests/property/ -v"
+lint = "ruff check . && ruff format --check ."
+fmt = "ruff format . && ruff check --fix ."
+typecheck = "mypy parler/"
+mutate = "mutmut run && mutmut results"
