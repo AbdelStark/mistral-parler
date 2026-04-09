@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
-import json
-import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
 
 def to_jsonable(value: Any) -> Any:
     if is_dataclass(value):
-        return to_jsonable(asdict(value))
+        return to_jsonable(asdict(cast(Any, value)))
     if isinstance(value, dict):
         return {str(key): to_jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -38,7 +37,7 @@ def write_json_atomic(path: Path, value: Any, *, indent: int = 2, sort_keys: boo
     with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         handle.write(payload)
         temp_path = Path(handle.name)
-    os.replace(temp_path, path)
+    temp_path.replace(path)
 
 
 def read_json(path: Path) -> Any:

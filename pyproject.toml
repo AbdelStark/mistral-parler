@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
 
 [project]
 name = "parler"
@@ -8,43 +8,90 @@ version = "0.1.0"
 description = "Meeting intelligence: multilingual transcription, decision extraction, and report generation"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["mistral", "voxtral", "transcription", "meeting", "nlp"]
 authors = [{ name = "Abdel", email = "abdel@noreply.github.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 dependencies = [
     "mistralai>=1.0.0",
     "pydantic>=2.0",
     "rich>=13.0",
     "jinja2>=3.1",
+    "PyYAML>=6.0.2",
+    "requests>=2.32.0",
     "tomli>=2.0; python_version < '3.11'",
     "python-dateutil>=2.8",
     "click>=8.1",
 ]
 
-[project.optional-dependencies]
-dev = [
+[project.urls]
+Homepage = "https://github.com/AbdelStark/parler"
+Repository = "https://github.com/AbdelStark/parler"
+Issues = "https://github.com/AbdelStark/parler/issues"
+Changelog = "https://github.com/AbdelStark/parler/releases"
+
+[dependency-groups]
+test = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-xdist>=3.5",      # parallel test execution
     "pytest-bdd>=7.0",        # BDD / Gherkin
     "pytest-asyncio>=0.23",   # async tests
     "pytest-benchmark>=4.0",  # performance benchmarks
+    "pytest-httpx>=0.35.0",
     "hypothesis>=6.100",      # property-based testing
     "freezegun>=1.4",         # deterministic time in tests
     "respx>=0.20",            # HTTP mock for httpx
+    "responses>=0.25.0",      # HTTP mock for requests
     "factory-boy>=3.3",       # fixture factories
-    "mutmut>=2.4",            # mutation testing
+]
+lint = [
     "ruff>=0.4",              # linting
+]
+typing = [
     "mypy>=1.9",              # type checking
     "pyright>=1.1",           # type checking (strict)
+    "types-python-dateutil>=2.9.0.20240316",
+    "types-PyYAML>=6.0.12.20250915",
+    "types-requests>=2.32.4.20250913",
 ]
+quality = [
+    "mutmut>=2.4",            # mutation testing
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "typing" },
+    { include-group = "quality" },
+]
+
+[project.optional-dependencies]
 diarize = [
     "pyannote.audio>=3.1",   # speaker diarisation (optional)
 ]
 
 [project.scripts]
 parler = "parler.cli:main"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.build-backend]
+module-root = ""
 
 # ─── pytest ──────────────────────────────────────────────────────────────────
 
@@ -136,7 +183,6 @@ select = [
     "B",        # flake8-bugbear
     "C4",       # flake8-comprehensions
     "SIM",      # flake8-simplify
-    "TCH",      # flake8-type-checking
     "PTH",      # flake8-use-pathlib
     "RUF",      # ruff-specific
 ]
@@ -160,32 +206,11 @@ disallow_any_generics = true
 no_implicit_optional = true
 show_error_codes = true
 
-[[tool.mypy.overrides]]
-module = ["tests.*", "features.*"]
-disallow_untyped_defs = false
-strict = false
-
 # ─── Mutmut (mutation testing) ───────────────────────────────────────────────
 
 [tool.mutmut]
 paths_to_mutate = "parler/"
 backup = false
-runner = "python -m pytest tests/unit/ -x -q --tb=no"
+runner = "uv run pytest tests/unit/ -x -q --tb=no"
 tests_dir = "tests/unit/"
 # Target mutation score ≥ 80% for core modules
-
-# ─── Hatch (project management) ──────────────────────────────────────────────
-
-[tool.hatch.envs.default]
-dependencies = ["parler[dev]"]
-
-[tool.hatch.envs.default.scripts]
-test = "pytest tests/unit tests/integration features/ -v --cov=parler --cov-report=term-missing"
-test-fast = "pytest tests/unit/ -v -x"
-test-all = "pytest -v --cov=parler"
-test-e2e = "pytest tests/e2e/ -v -s"
-test-props = "pytest tests/property/ -v"
-lint = "ruff check . && ruff format --check ."
-fmt = "ruff format . && ruff check --fix ."
-typecheck = "mypy parler/"
-mutate = "mutmut run && mutmut results"

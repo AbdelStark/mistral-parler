@@ -6,9 +6,9 @@
 
 | Layer | Technology | Version | Notes |
 |---|---|---:|---|
-| Runtime | Python | `>=3.11` | local interpreter seen here: `3.14.3` [verify] |
-| Build backend | Hatchling | [verify] | configured in `pyproject.toml`; no lockfile committed |
-| Package manager | `python3 -m pip` | [verify] | use editable installs once the `parler/` package exists |
+| Runtime | Python | `3.11` | pinned in `.python-version`; validated with `uv` on `3.11.14` |
+| Build backend | `uv_build` | `0.9.18` | configured in `pyproject.toml` with flat-layout support |
+| Package manager | `uv` | `0.9.18` | use `uv sync`, `uv run`, `uv build`, `uv publish` |
 | CLI | Click | `>=8.1` | `parler = parler.cli:main` |
 | Core models | stdlib dataclasses + typed validation | current | canonical shapes live in `SDD.md` |
 | LLM vendor SDK | `mistralai` | `>=1.0.0` | Voxtral transcription + Mistral extraction [verify] |
@@ -23,10 +23,10 @@
 
 <repo_state>
 
-- Repository status on `2026-04-09`: implementation-ready baseline, not implementation-complete.
-- Phase 1 baseline is now implemented: `parler/` exists with canonical models, errors, config loading, local serialization/hashing, a minimal renderer, and a minimal orchestrator/state surface.
-- Later phases are still incomplete: no audio ingestion, transcription, attribution, extraction, export adapters, retry layer, or cache implementations exist yet.
-- No CI workflow file is committed under `.github/workflows/`.
+- Repository status on `2026-04-09`: implementation in progress, not implementation-complete.
+- Phase 1 and Phase 2 are implemented: `parler/` now includes canonical models, errors, config loading, local serialization/hashing, a minimal renderer, a minimal orchestrator/state surface, audio ingestion, FFmpeg helpers, retry utilities, and compatibility shims.
+- Later phases are still incomplete: transcription, attribution, extraction, export adapters, and cache implementations remain to be built.
+- CI and publishing workflows now exist under `.github/workflows/`.
 - E2E fixture audio/transcript/extraction assets referenced by tests are not committed yet; only `tests/fixtures/decision_logs/fr_meeting_5min_expected.json` exists.
 - Git history is linear and docs/tests-heavy; current branch is `main`.
 
@@ -37,12 +37,14 @@
 | Area | Status | Notes |
 |---|---|---|
 | Phase 1 package skeleton | complete | `parler/__init__.py`, `errors.py`, `models.py`, `config.py`, `util/`, `rendering/`, `pipeline/` exist |
-| Config loading | complete | TOML, JSON, minimal YAML, env override, CLI override, validation, secret scrubbing |
+| Config loading | complete | TOML, JSON, YAML via `PyYAML`, env override, CLI override, validation, secret scrubbing |
 | Canonical models | complete | frozen dataclasses with compatibility defaults for current tests |
 | Rendering surface | partial | Markdown/HTML/JSON implemented; enough for current rendering tests |
 | Orchestrator surface | partial | state machine, checkpoint save/load, cost gate, callbacks, and soft-fail attribution behavior implemented |
-| Audio / transcription / extraction domains | not started | later phases still need real implementations |
-| Formal pytest verification | blocked in current interpreter [verify] | `python3 -m pytest` fails because `pytest` is not installed locally |
+| Audio ingestion + retry | complete | `parler/audio/*`, `parler/util.retry`, and `parler/utils.retry` shim are implemented and test-backed |
+| Packaging / release automation | complete | `uv.lock`, CLI entry points, CI workflow, publish workflow, wheel/sdist smoke tests |
+| Transcription / attribution / extraction / exports / cache | not started | later phases still need real implementations |
+| Formal verification | complete for implemented slice | validated with `uv run pytest`, `ruff`, `mypy`, `uv build`, and isolated smoke installs |
 
 </implementation_status>
 
@@ -92,20 +94,22 @@ parler/
 
 <commands>
 
-Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are present now.
+Commands marked `Phase 3+` assume later domain modules exist. Phase 1 and Phase 2 files are present now.
 
 | Task | Command | Phase | Notes |
 |---|---|---|---|
 | Read canonical headings | `rg -n "^## |^### " SPEC.md SDD.md TESTING.md IMPLEMENTATION_PLAN.md` | now | fastest orientation pass |
-| Install dev deps | `python3 -m pip install -e '.[dev]'` | now | needed before formal pytest verification in this interpreter |
-| Focused unit slice | `python3 -m pytest tests/unit/test_config_loading.py -q` | now | Phase 1 anchor; blocked until `pytest` is installed locally |
-| Focused render/orchestrator slice | `python3 -m pytest tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py -q` | now | validates the current Phase 1 compatibility surface |
-| Fast verification | `python3 -m pytest tests/unit tests/integration tests/property features -v --cov=parler` | Phase 2+ | canonical fast path from `TESTING.md` |
-| E2E | `python3 -m pytest tests/e2e -v -s -m slow` | Phase 8 | requires `MISTRAL_API_KEY`, generated fixtures, and installed test deps [verify] |
+| Sync dev env | `uv sync --locked --group dev` | now | installs editable package and pinned dev toolchain |
+| Focused unit slice | `uv run pytest tests/unit/test_config_loading.py -q` | now | Phase 1 anchor |
+| Focused Phase 1+2 slice | `uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/integration/test_retry_behavior.py -q` | now | validated implemented slice |
+| Smoke test editable install | `uv run python tests/smoke_test.py` | now | exercises import surface and CLI help |
+| Fast verification | `uv run pytest tests/unit tests/integration tests/property features -v --cov=parler` | Phase 3+ | widen only as later domains land |
+| E2E | `uv run pytest tests/e2e -v -s -m slow` | Phase 8 | requires `MISTRAL_API_KEY`, generated fixtures, and installed test deps [verify] |
 | Benchmarks | `pytest tests/benchmarks --benchmark-only` | Phase 8 | not for day-to-day changes |
-| Lint | `ruff check .` | Phase 1+ | run before finalizing |
-| Format | `ruff format .` | Phase 1+ | repo formatting standard |
-| Type check | `mypy parler/` | Phase 1+ | strict config in `pyproject.toml` |
+| Lint | `uv run ruff check parler tests/smoke_test.py` | Phase 1+ | current CI scope |
+| Format | `uv run ruff format --check parler tests/smoke_test.py` | Phase 1+ | current CI scope |
+| Type check | `uv run mypy parler/` | Phase 1+ | strict config in `pyproject.toml` |
+| Build dists | `uv build` | Phase 1+ | produces wheel + sdist |
 
 </commands>
 
@@ -126,7 +130,7 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
       - Treat `SPEC.md` and `SDD.md` as the source of truth; read them before assuming a test or RFC is correct.
       - Keep `assemble_chunks`, deadline resolution, parser normalization, retry logic, and cache-key builders pure and separately testable.
       - Preserve transcript segment IDs and timestamps; speaker turns are a rendering concern, not a mutation of canonical transcript structure.
-      - Keep the current compatibility baseline: canonical Phase 1 modules plus `PipelineConfig = ParlerConfig`.
+      - Keep the current compatibility baseline: canonical Phase 1/2 modules plus `PipelineConfig = ParlerConfig` and `parler.utils.retry`.
       - Add compatibility shims for remaining drift points only when a new test surface requires them: `parler.transcription.assembler`, `parler.transcription.attributor`, and `parler.utils.retry`.
       - Keep export adapters isolated from renderer logic; local output success must survive export failure.
       - Treat checkpoints and caches as sensitive local artifacts; use restrictive permissions where the OS supports them.
@@ -155,7 +159,7 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
     4. Implement pure models/config/helpers first, then adapters, then orchestration glue.
     5. Add compatibility shims when import-path drift would otherwise block progress.
     6. Run the narrowest tests first, then widen to related unit/integration/BDD coverage.
-    7. Finish with `ruff check .`, `mypy parler/`, and the fast verification path.
+    7. Finish with `uv run ruff check parler tests/smoke_test.py`, `uv run mypy parler/`, and the narrowest verified pytest slice.
   </implementation_slice>
 
   <contract_reconciliation>
@@ -218,12 +222,11 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `python3 -m pytest: No module named pytest` | current interpreter lacks test dependencies | install dev deps before formal verification |
 | `ModuleNotFoundError: parler.transcription.assembler` or `...attributor` | import-path drift between tests and `SDD.md` | add compatibility shims or coordinate an approved rename |
 | `ModuleNotFoundError: parler.utils.retry` | tests import `utils`, design docs say `util` | expose `parler/utils/` shim or normalize references in one coordinated pass |
 | `ConfigError: api_key` or CLI exit code `3` | `MISTRAL_API_KEY` / `PARLER_API_KEY` missing | set one env var; never hardcode the key |
 | E2E fixture audio or transcript JSON missing | only the decision-log fixture is committed today | generate synthetic fixtures per `tests/fixtures/README.md` or skip E2E |
-| YAML config support or export adapter tests fail [inference] | tests assume YAML parsing and `requests`-based exporters, but `pyproject.toml` does not currently declare `PyYAML` or `requests` | add the dependency or standardize the implementation in an approved tooling pass |
+| `Not implemented yet: VoxtralTranscriber ...` or similar | CLI/orchestrator is wired, but Phase 3+ domains are still stubs | implement the next phase instead of widening the CLI contract |
 
   </known_issues>
 
@@ -241,7 +244,7 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
   - Harness: Codex-compatible local coding agent
   - File system scope: full read/write access to the repository
   - Network access: available in the current harness; verify before real API calls
-  - Tool access: shell, git, local file editing; no repo-local CI/MCP automation is committed
+  - Tool access: shell, git, local file editing; repo-local CI/publish workflows are committed
   - Human interaction model: synchronous chat with explicit approval for gated zones
 </environment>
 
@@ -251,7 +254,7 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
 
   Available skills:
   - `contract-reconciliation.md`: resolve drift between spec, design, tests, features, and RFCs before coding
-  - `vertical-slice-implementation.md`: build the missing `parler/` package in narrow, test-backed phases
+  - `vertical-slice-implementation.md`: extend `parler/` in narrow, test-backed phases
   - `test-driven-delivery.md`: use the layered pytest/BDD/property/benchmark strategy correctly
   - `mistral-pipeline.md`: implement Voxtral/Mistral adapters, caches, quality gates, and parser normalization
   - `orchestrator-and-cli.md`: implement `ProcessingState`, checkpoint/resume, cost gating, and CLI commands
@@ -266,13 +269,14 @@ Commands marked `Phase 2+` assume later domain modules exist. Phase 1 files are 
     - `2026-04-09`: diarization is hybrid and ordered as vendor diarization -> existing upstream IDs -> text-only fallback.
     - `2026-04-09`: transcription and extraction caches must use semantic fingerprints, not weak content-hash shortcuts.
     - `2026-04-09`: the repository is intentionally spec/test-first; grow `parler/` via vertical slices, not a full scaffold dump.
-    - `2026-04-09`: Phase 1 is implemented with a compatibility-oriented baseline; later phases should extend it rather than replacing it wholesale.
+    - `2026-04-09`: Phase 1 and Phase 2 are implemented with a compatibility-oriented baseline; later phases should extend them rather than replacing them wholesale.
+    - `2026-04-09`: packaging, locking, build, and publishing are standardized on `uv` / `uv_build`; avoid mixing `pip`, Hatch, Poetry, or ad hoc release commands.
   </project_decisions>
 
   <lessons_learned>
     - Contract drift is the dominant project risk. Read the canonical docs before trusting an individual test import path.
     - E2E failure can mean missing synthetic fixtures, not broken application code.
     - Compatibility shims are cheaper and safer than broad rewrites while the baseline is still settling.
-    - The current local interpreter still lacks `pytest`; smoke tests may be the only available verification until dev deps are installed.
+    - Keep README, CI scope, and agent context aligned with delivered phases; roadmap claims are noise until the code exists.
   </lessons_learned>
 </memory>

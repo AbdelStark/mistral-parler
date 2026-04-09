@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from enum import Enum, auto
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import date
+from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from ..audio.ingester import AudioIngester
 from ..config import ParlerConfig
-from ..errors import APIError, ProcessingError
+from ..errors import ProcessingError
 from ..models import (
     AudioFile,
     Commitment,
@@ -26,13 +29,10 @@ from ..rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
 
 
-class AudioIngester:
-    def ingest(self, input_path: Path) -> AudioFile:  # pragma: no cover - implementation follows later
-        raise NotImplementedError("AudioIngester is not implemented yet")
-
-
 class VoxtralTranscriber:
-    def transcribe(self, audio_file: AudioFile) -> Transcript:  # pragma: no cover - implementation follows later
+    def transcribe(
+        self, audio_file: AudioFile
+    ) -> Transcript:  # pragma: no cover - implementation follows later
         raise NotImplementedError("VoxtralTranscriber is not implemented yet")
 
 
@@ -52,7 +52,7 @@ class DecisionExtractor:
         self,
         transcript: Transcript,
         *,
-        meeting_date=None,
+        meeting_date: date | None = None,
         participants: list[str] | None = None,
     ) -> DecisionLog:  # pragma: no cover - implementation follows later
         raise NotImplementedError("DecisionExtractor is not implemented yet")
@@ -81,22 +81,22 @@ class ProcessingState:
     completed_stages: frozenset[PipelineStage]
     checkpoint_path: Path | None
 
-    def _with_stage(self, stage: PipelineStage, **changes: Any) -> "ProcessingState":
+    def _with_stage(self, stage: PipelineStage, **changes: Any) -> ProcessingState:
         return replace(self, completed_stages=self.completed_stages | {stage}, **changes)
 
-    def with_audio_file(self, audio_file: AudioFile) -> "ProcessingState":
+    def with_audio_file(self, audio_file: AudioFile) -> ProcessingState:
         return replace(self, audio_file=audio_file)
 
-    def with_transcript(self, transcript: Transcript) -> "ProcessingState":
+    def with_transcript(self, transcript: Transcript) -> ProcessingState:
         return self._with_stage(PipelineStage.TRANSCRIBE, transcript=transcript)
 
-    def with_attributed_transcript(self, transcript: Transcript) -> "ProcessingState":
+    def with_attributed_transcript(self, transcript: Transcript) -> ProcessingState:
         return self._with_stage(PipelineStage.ATTRIBUTE, attributed_transcript=transcript)
 
-    def with_decision_log(self, decision_log: DecisionLog) -> "ProcessingState":
+    def with_decision_log(self, decision_log: DecisionLog) -> ProcessingState:
         return self._with_stage(PipelineStage.EXTRACT, decision_log=decision_log)
 
-    def with_report(self, report: str) -> "ProcessingState":
+    def with_report(self, report: str) -> ProcessingState:
         return self._with_stage(PipelineStage.RENDER, report=report)
 
 
@@ -230,7 +230,9 @@ class PipelineOrchestrator:
     def _checkpoint_data(self, state: ProcessingState) -> dict[str, Any]:
         payload = {
             "audio_hash": state.audio_file.content_hash if state.audio_file else None,
-            "completed_stages": [stage.name for stage in sorted(state.completed_stages, key=lambda item: item.value)],
+            "completed_stages": [
+                stage.name for stage in sorted(state.completed_stages, key=lambda item: item.value)
+            ],
         }
         if state.transcript is not None:
             payload["transcript"] = to_jsonable(state.transcript)
@@ -330,12 +332,14 @@ class PipelineOrchestrator:
 
         working_transcript = state.attributed_transcript or state.transcript
         if not no_diarize and PipelineStage.ATTRIBUTE not in state.completed_stages:
+            assert state.transcript is not None
+            transcript_for_attribution = state.transcript
             attributor = SpeakerAttributor()
             try:
                 attributed = self._run_stage(
                     PipelineStage.ATTRIBUTE,
                     lambda: attributor.attribute(
-                        state.transcript,
+                        transcript_for_attribution,
                         participants=self.config.participants,
                         anonymize=self.config.output.anonymize_speakers,
                     ),
@@ -348,6 +352,7 @@ class PipelineOrchestrator:
                 working_transcript = state.transcript
 
         if PipelineStage.EXTRACT not in state.completed_stages:
+            assert working_transcript is not None
             extractor = DecisionExtractor()
             decision_log = self._run_stage(
                 PipelineStage.EXTRACT,
@@ -363,11 +368,13 @@ class PipelineOrchestrator:
             self._save_checkpoint(state)
 
         if PipelineStage.RENDER not in state.completed_stages:
+            assert state.decision_log is not None
+            decision_log_for_render = state.decision_log
             renderer = ReportRenderer()
             report = self._run_stage(
                 PipelineStage.RENDER,
                 lambda: renderer.render(
-                    state.decision_log,
+                    decision_log_for_render,
                     RenderConfig(format=OutputFormat(self.config.output.format)),
                 ),
                 on_stage_start=on_stage_start,

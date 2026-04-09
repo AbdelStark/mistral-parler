@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.18"
+          enable-cache: true
+
+      - name: Sync project
+        run: uv sync --locked --group dev
+
+      - name: Lint
+        run: uv run ruff check parler tests/smoke_test.py
+
+      - name: Format check
+        run: uv run ruff format --check parler tests/smoke_test.py
+
+      - name: Type check
+        run: uv run mypy parler/
+
+      - name: Test implemented slice
+        run: >
+          uv run pytest
+          tests/unit/test_config_loading.py
+          tests/unit/test_report_rendering.py
+          tests/unit/test_pipeline_orchestration.py
+          tests/unit/test_audio_ingestion.py
+          tests/integration/test_retry_behavior.py
+          -v --cov=parler --cov-report=term-missing
+
+      - name: Smoke test editable install
+        run: uv run python tests/smoke_test.py
+
+  package:
+    runs-on: ubuntu-latest
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.18"
+          enable-cache: true
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Smoke test wheel
+        run: uv run --isolated --no-project --with dist/*.whl tests/smoke_test.py
+
+      - name: Smoke test source distribution
+        run: uv run --isolated --no-project --with dist/*.tar.gz tests/smoke_test.py

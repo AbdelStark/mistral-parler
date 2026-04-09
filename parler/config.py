@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import date
 import json
 import os
+import tomllib
+from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+import yaml
 
 from .errors import ConfigError
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
-    import tomli as tomllib
 
 
 def _parse_scalar(value: str) -> Any:
@@ -48,34 +46,10 @@ def _parse_scalar(value: str) -> Any:
 
 
 def _parse_yaml(text: str) -> dict[str, Any]:
-    root: dict[str, Any] = {}
-    current_section: str | None = None
-    for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        stripped = line.strip()
-        if ":" not in stripped:
-            continue
-        key, raw_value = stripped.split(":", 1)
-        key = key.strip()
-        value = raw_value.strip()
-        if indent == 0:
-            if value == "":
-                root[key] = {}
-                current_section = key
-            else:
-                root[key] = _parse_scalar(value)
-                current_section = None
-            continue
-        if current_section is None:
-            raise ConfigError(f"Unsupported YAML structure near '{key}'")
-        section = root.setdefault(current_section, {})
-        if not isinstance(section, dict):
-            raise ConfigError(f"YAML section '{current_section}' must be a mapping")
-        section[key] = _parse_scalar(value)
-    return root
+    payload = yaml.safe_load(text) or {}
+    if not isinstance(payload, dict):
+        raise ConfigError("YAML config root must be a mapping")
+    return cast(dict[str, Any], payload)
 
 
 def _merge_dicts(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -105,7 +79,7 @@ def _parse_config_file(path: Path) -> dict[str, Any]:
     if suffix == ".toml":
         return tomllib.loads(text)
     if suffix in {".json"}:
-        return json.loads(text or "{}")
+        return cast(dict[str, Any], json.loads(text or "{}"))
     if suffix in {".yaml", ".yml"}:
         return _parse_yaml(text)
     raise ConfigError(f"Unsupported config format: {path.suffix}")
@@ -260,7 +234,9 @@ def _validate(data: dict[str, Any]) -> None:
         raise ConfigError("extraction.multi_pass_threshold must be positive")
 
 
-def load_config(config_path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> ParlerConfig:
+def load_config(
+    config_path: str | Path | None = None, overrides: dict[str, Any] | None = None
+) -> ParlerConfig:
     config_file: Path | None
     if config_path is None:
         config_file = _discover_default_config()

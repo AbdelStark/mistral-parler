@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
+
+T = TypeVar("T")
 
 
-def _as_tuple(value: tuple[object, ...] | list[object] | None) -> tuple[object, ...]:
+def _as_tuple(value: tuple[T, ...] | list[T] | None) -> tuple[T, ...]:
     if value is None:
         return ()
     if isinstance(value, tuple):

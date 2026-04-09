@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from html import escape
 import json
+from dataclasses import dataclass
+from enum import StrEnum
+from html import escape
 
-from ..models import Commitment, Decision, DecisionLog, OpenQuestion, Rejection
+from ..models import Commitment, Decision, DecisionLog
 from ..util.serialization import to_jsonable
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     MARKDOWN = "markdown"
     HTML = "html"
     JSON = "json"
@@ -42,7 +42,11 @@ class ReportRenderer:
     """Minimal but valid renderer for the canonical decision log."""
 
     def render(self, decision_log: DecisionLog, config: RenderConfig) -> str:
-        fmt = config.format if isinstance(config.format, OutputFormat) else OutputFormat(str(config.format))
+        fmt = (
+            config.format
+            if isinstance(config.format, OutputFormat)
+            else OutputFormat(str(config.format))
+        )
         if fmt == OutputFormat.JSON:
             return json.dumps(to_jsonable(decision_log), ensure_ascii=False, indent=2)
         if fmt == OutputFormat.HTML:
@@ -71,28 +75,39 @@ class ReportRenderer:
                     lines.append(f"> {item.quote}")
         else:
             lines.append("| - | No decisions recorded | - | - | - |")
-        lines.extend(["", "## Commitments", "", "| ID | Owner | Action | Deadline | Confidence |", "| --- | --- | --- | --- | --- |"])
+        lines.extend(
+            [
+                "",
+                "## Commitments",
+                "",
+                "| ID | Owner | Action | Deadline | Confidence |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
         if decision_log.commitments:
-            for item in decision_log.commitments:
+            for commitment in decision_log.commitments:
                 lines.append(
-                    f"| {item.id} | {item.owner} | {item.action} | {_format_deadline(item)} | {item.confidence} |"
+                    f"| {commitment.id} | {commitment.owner} | {commitment.action} | "
+                    f"{_format_deadline(commitment)} | {commitment.confidence} |"
                 )
-                if item.quote:
-                    lines.append(f"> {item.quote}")
+                if commitment.quote:
+                    lines.append(f"> {commitment.quote}")
         else:
             lines.append("| - | - | No commitments recorded | - | - |")
         if decision_log.rejected:
             lines.extend(["", "## Rejected", ""])
-            for item in decision_log.rejected:
-                lines.append(f"- {item.id}: {item.summary} ({_format_timestamp(item.timestamp_s)})")
-                if item.quote:
-                    lines.append(f"  Quote: {item.quote}")
+            for rejection in decision_log.rejected:
+                lines.append(
+                    f"- {rejection.id}: {rejection.summary} ({_format_timestamp(rejection.timestamp_s)})"
+                )
+                if rejection.quote:
+                    lines.append(f"  Quote: {rejection.quote}")
         if decision_log.open_questions:
             lines.extend(["", "## Open Questions", ""])
-            for item in decision_log.open_questions:
-                lines.append(f"- {item.id}: {item.question}")
-                if item.asked_by:
-                    lines.append(f"  Asked by: {item.asked_by}")
+            for question in decision_log.open_questions:
+                lines.append(f"- {question.id}: {question.question}")
+                if question.asked_by:
+                    lines.append(f"  Asked by: {question.asked_by}")
         lines.extend(
             [
                 "",
@@ -127,12 +142,20 @@ class ReportRenderer:
                 "</tr>"
             )
 
-        rejected_html = "".join(
-            f"<li>{escape(item.id)}: {escape(item.summary)}</li>" for item in decision_log.rejected
-        ) or "<li>None</li>"
-        questions_html = "".join(
-            f"<li>{escape(item.id)}: {escape(item.question)}</li>" for item in decision_log.open_questions
-        ) or "<li>None</li>"
+        rejected_html = (
+            "".join(
+                f"<li>{escape(item.id)}: {escape(item.summary)}</li>"
+                for item in decision_log.rejected
+            )
+            or "<li>None</li>"
+        )
+        questions_html = (
+            "".join(
+                f"<li>{escape(item.id)}: {escape(item.question)}</li>"
+                for item in decision_log.open_questions
+            )
+            or "<li>None</li>"
+        )
         empty_banner = "<p>No decisions recorded.</p>" if decision_log.is_empty else ""
         return (
             "<!DOCTYPE html>"

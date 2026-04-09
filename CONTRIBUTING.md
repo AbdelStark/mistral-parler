@@ -1,0 +1,37 @@
+# Contributing
+
+`parler` uses [`uv`](https://docs.astral.sh/uv/) for Python version management, dependency resolution, locking, and command execution.
+
+## Development setup
+
+```bash
+uv python install
+uv sync --locked --group dev
+```
+
+This creates `.venv/` and installs the project in editable mode.
+
+## Common commands
+
+```bash
+uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/integration/test_retry_behavior.py -q
+uv run python tests/smoke_test.py
+uv run ruff check parler tests/smoke_test.py
+uv run ruff format --check parler tests/smoke_test.py
+uv run mypy parler/
+uv build
+```
+
+The wider `tests/`, `features/`, and roadmap modules are intentionally ahead of the currently implemented phases. Keep CI green by expanding the validated surface only when a phase is actually delivered.
+
+## Contribution rules
+
+- Keep changes traceable to `SPEC.md`, `SDD.md`, and `TESTING.md`.
+- Prefer narrow, test-backed vertical slices over wide speculative scaffolding.
+- Treat local caches and checkpoints as sensitive data; never commit them.
+- Do not commit real audio, transcripts, secrets, or third-party API tokens.
+
+## Releases
+
+Releases are built and published with `uv` and GitHub Actions Trusted Publishing.
+See `.github/workflows/publish.yml`.

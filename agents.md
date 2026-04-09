@@ -71,7 +71,7 @@
 </state_machine>
 
 <parallel_execution>
-  Safe to parallelize only after Phase 1 core types are stable:
+  Safe to parallelize after Phase 1/2 local foundations are stable:
   - `parler/audio/*` vs `parler/rendering/*`
   - `parler/export/*` adapters in separate files
   - test additions in non-overlapping files
@@ -94,7 +94,6 @@
 <escalation>
   Escalate to a human when:
   - a change would modify `SPEC.md`, `SDD.md`, `TESTING.md`, or `pyproject.toml`
-  - dependency additions are needed (`requests`, `PyYAML`, fixture generators, CI tooling)
   - a public CLI contract or checkpoint schema must change
   - real API usage, real recordings, or sensitive local state would be touched
   - confidence in the correct resolution falls below 70%
