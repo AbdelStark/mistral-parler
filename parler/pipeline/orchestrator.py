@@ -10,6 +10,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
+from ..attribution.attributor import SpeakerAttributor
 from ..audio.ingester import AudioIngester
 from ..config import ParlerConfig
 from ..errors import ProcessingError
@@ -29,17 +30,6 @@ from ..rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
 from ..transcription.cache import TranscriptCache
 from ..transcription.transcriber import VoxtralTranscriber
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
-
-
-class SpeakerAttributor:
-    def attribute(
-        self,
-        transcript: Transcript,
-        *,
-        participants: list[str] | None = None,
-        anonymize: bool = False,
-    ) -> Transcript:  # pragma: no cover - implementation follows later
-        raise NotImplementedError("SpeakerAttributor is not implemented yet")
 
 
 class DecisionExtractor:

@@ -24,8 +24,8 @@
 <repo_state>
 
 - Repository status on `2026-04-09`: implementation in progress, not implementation-complete.
-- Phase 1 through Phase 3 are implemented: `parler/` now includes canonical models, errors, config loading, local serialization/hashing, a minimal renderer, a minimal orchestrator/state surface, audio ingestion, FFmpeg helpers, retry utilities, transcription assembly, quality evaluation, semantic transcript caching, and compatibility shims.
-- Later phases are still incomplete: speaker attribution, decision extraction, export adapters, and broader CLI/report surfaces remain to be built.
+- Phase 1 through Phase 4 are implemented: `parler/` now includes canonical models, errors, config loading, local serialization/hashing, a minimal renderer, a minimal orchestrator/state surface, audio ingestion, FFmpeg helpers, retry utilities, transcription assembly, quality evaluation, semantic transcript caching, speaker-attribution heuristics, prompt scaffolding, and compatibility shims.
+- Later phases are still incomplete: decision extraction, export adapters, and broader CLI/report surfaces remain to be built.
 - CI and publishing workflows now exist under `.github/workflows/`.
 - E2E fixture audio/transcript/extraction assets referenced by tests are not committed yet; only `tests/fixtures/decision_logs/fr_meeting_5min_expected.json` exists.
 - Git history is linear and docs/tests-heavy; current branch is `main`.
@@ -44,7 +44,8 @@
 | Audio ingestion + retry | complete | `parler/audio/*`, `parler/util.retry`, and `parler/utils.retry` shim are implemented and test-backed |
 | Transcription + quality + transcript cache | complete | `parler/transcription/*` is implemented and test-backed; `parler/extraction/cache.py` exists for cache-contract support |
 | Packaging / release automation | complete | `uv.lock`, CLI entry points, CI workflow, publish workflow, wheel/sdist smoke tests |
-| Attribution / extraction / exports | not started | later phases still need real implementations |
+| Attribution | complete | `parler/attribution/*`, `parler/prompts/attribution.py`, and `parler.transcription.attributor` shim are implemented and test-backed |
+| Extraction / exports | not started | later phases still need real implementations |
 | Formal verification | complete for implemented slice | validated with `uv run pytest`, `ruff`, `mypy`, `uv build`, and isolated smoke installs |
 
 </implementation_status>
@@ -63,7 +64,7 @@ rfcs/                    # Historical component records; SPEC/SDD win on conflic
 features/                # BDD acceptance contracts [gated]
 tests/                   # pytest TDD/integration/property/E2E/benchmark contracts [gated]
 tests/fixtures/          # Synthetic fixture policy; actual audio/transcript assets mostly missing [gated]
-parler/                  # Runtime package; Phases 1-3 baseline exists [agent: modify]
+parler/                  # Runtime package; Phases 1-4 baseline exists [agent: modify]
 .codex/skills/           # Repo-local agent skills [agent: create/modify]
 .claude/skills -> ../.codex/skills
 .agents/skills -> ../.codex/skills
@@ -95,16 +96,16 @@ parler/
 
 <commands>
 
-Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Phase 3 files are present now.
+Commands marked `Phase 5+` assume later domain modules exist. Phase 1 through Phase 4 files are present now.
 
 | Task | Command | Phase | Notes |
 |---|---|---|---|
 | Read canonical headings | `rg -n "^## |^### " SPEC.md SDD.md TESTING.md IMPLEMENTATION_PLAN.md` | now | fastest orientation pass |
 | Sync dev env | `uv sync --locked --group dev` | now | installs editable package and pinned dev toolchain |
 | Focused unit slice | `uv run pytest tests/unit/test_config_loading.py -q` | now | Phase 1 anchor |
-| Focused Phase 1-3 slice | `uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/unit/test_chunk_assembly.py tests/unit/test_transcript_quality.py tests/integration/test_retry_behavior.py tests/integration/test_voxtral_integration.py tests/integration/test_cache_behavior.py -q` | now | validated implemented slice |
+| Focused Phase 1-4 slice | `uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/unit/test_chunk_assembly.py tests/unit/test_transcript_quality.py tests/unit/test_speaker_attribution.py tests/integration/test_retry_behavior.py tests/integration/test_voxtral_integration.py tests/integration/test_cache_behavior.py -q` | now | validated implemented slice |
 | Smoke test editable install | `uv run python tests/smoke_test.py` | now | exercises import surface and CLI help |
-| Fast verification | `uv run pytest tests/unit tests/integration tests/property features -v --cov=parler` | Phase 4+ | widen only as later domains land |
+| Fast verification | `uv run pytest tests/unit tests/integration tests/property features -v --cov=parler` | Phase 5+ | widen only as later domains land |
 | E2E | `uv run pytest tests/e2e -v -s -m slow` | Phase 8 | requires `MISTRAL_API_KEY`, generated fixtures, and installed test deps [verify] |
 | Benchmarks | `pytest tests/benchmarks --benchmark-only` | Phase 8 | not for day-to-day changes |
 | Lint | `uv run ruff check parler tests/smoke_test.py` | Phase 1+ | current CI scope |
@@ -131,8 +132,8 @@ Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Ph
       - Treat `SPEC.md` and `SDD.md` as the source of truth; read them before assuming a test or RFC is correct.
       - Keep `assemble_chunks`, deadline resolution, parser normalization, retry logic, and cache-key builders pure and separately testable.
       - Preserve transcript segment IDs and timestamps; speaker turns are a rendering concern, not a mutation of canonical transcript structure.
-      - Keep the current compatibility baseline: canonical Phase 1-3 modules plus `PipelineConfig = ParlerConfig`, `parler.utils.retry`, and `parler.transcription.assembler`.
-      - Add compatibility shims for remaining drift points only when a new test surface requires them: `parler.transcription.attributor` and any future extraction/export aliases.
+      - Keep the current compatibility baseline: canonical Phase 1-4 modules plus `PipelineConfig = ParlerConfig`, `parler.utils.retry`, `parler.transcription.assembler`, and `parler.transcription.attributor`.
+      - Add new compatibility shims only when a new test surface requires them; keep future extraction/export aliases narrow and explicit.
       - Keep export adapters isolated from renderer logic; local output success must survive export failure.
       - Treat checkpoints and caches as sensitive local artifacts; use restrictive permissions where the OS supports them.
     </do>
@@ -156,7 +157,7 @@ Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Ph
   <implementation_slice>
     1. Read the relevant phase in `IMPLEMENTATION_PLAN.md`.
     2. Read the matching `SPEC.md` / `SDD.md` sections and the narrowest defining tests/features.
-    3. Reuse the existing Phase 1-3 baseline instead of rebuilding it; add only the domain modules required for the active slice.
+    3. Reuse the existing Phase 1-4 baseline instead of rebuilding it; add only the domain modules required for the active slice.
     4. Implement pure models/config/helpers first, then adapters, then orchestration glue.
     5. Add compatibility shims when import-path drift would otherwise block progress.
     6. Run the narrowest tests first, then widen to related unit/integration/BDD coverage.
@@ -185,7 +186,7 @@ Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Ph
 
 | Path | Zone | Reason |
 |---|---|---|
-| `parler/` | autonomous | primary implementation surface; Phase 1-3 baseline exists |
+| `parler/` | autonomous | primary implementation surface; Phase 1-4 baseline exists |
 | `.codex/skills/`, `CLAUDE.md`, `agents.md` | autonomous | repo-local agent context |
 | `README.md`, `SPEC.md`, `SDD.md`, `TESTING.md`, `IMPLEMENTATION_PLAN.md`, `pyproject.toml` | gated | public/tooling/canonical contract files |
 | `rfcs/`, `features/`, `tests/`, `tests/fixtures/` | gated | contract and verification artifacts; update deliberately |
@@ -223,11 +224,11 @@ Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Ph
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: parler.transcription.attributor` | import-path drift between tests and `SDD.md` | add a compatibility shim or coordinate an approved rename |
+| Most segments resolve to `Unknown` | opaque diarization labels had no participant hints or transcript cues | pass `--participants`, keep upstream speaker labels when available, or accept the conservative fallback |
 | `ModuleNotFoundError: parler.utils.retry` | tests import `utils`, design docs say `util` | expose `parler/utils/` shim or normalize references in one coordinated pass |
 | `ConfigError: api_key` or CLI exit code `3` | `MISTRAL_API_KEY` / `PARLER_API_KEY` missing | set one env var; never hardcode the key |
 | E2E fixture audio or transcript JSON missing | only the decision-log fixture is committed today | generate synthetic fixtures per `tests/fixtures/README.md` or skip E2E |
-| `Not implemented yet: SpeakerAttributor ...` or `DecisionExtractor ...` | CLI/orchestrator is wired through transcription, but later phases are still stubs | implement the next phase instead of widening the CLI contract |
+| `Not implemented yet: DecisionExtractor ...` | CLI/orchestrator is wired through attribution, but extraction is still a later phase stub | implement the extraction slice instead of widening the CLI contract |
 
   </known_issues>
 
@@ -270,7 +271,8 @@ Commands marked `Phase 4+` assume later domain modules exist. Phase 1 through Ph
     - `2026-04-09`: diarization is hybrid and ordered as vendor diarization -> existing upstream IDs -> text-only fallback.
     - `2026-04-09`: transcription and extraction caches must use semantic fingerprints, not weak content-hash shortcuts.
     - `2026-04-09`: the repository is intentionally spec/test-first; grow `parler/` via vertical slices, not a full scaffold dump.
-    - `2026-04-09`: Phase 1 through Phase 3 are implemented with a compatibility-oriented baseline; later phases should extend them rather than replacing them wholesale.
+    - `2026-04-09`: Phase 1 through Phase 4 are implemented with a compatibility-oriented baseline; later phases should extend them rather than replacing them wholesale.
+    - `2026-04-09`: speaker attribution is conservative by design: prefer human-readable upstream labels, resolve opaque diarization IDs with participant hints and transcript cues, and fall back to `Unknown` instead of hallucinating names.
     - `2026-04-09`: the transcription adapter uses a local compatibility layer for SDK drift (`mistralai.client.*` vs older `MistralClient` / `APIStatusError` expectations); preserve that seam until the test and SDK contracts converge.
     - `2026-04-09`: packaging, locking, build, and publishing are standardized on `uv` / `uv_build`; avoid mixing `pip`, Hatch, Poetry, or ad hoc release commands.
   </project_decisions>

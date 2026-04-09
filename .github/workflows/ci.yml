@@ -49,6 +49,7 @@ jobs:
           tests/unit/test_audio_ingestion.py
           tests/unit/test_chunk_assembly.py
           tests/unit/test_transcript_quality.py
+          tests/unit/test_speaker_attribution.py
           tests/integration/test_retry_behavior.py
           tests/integration/test_voxtral_integration.py
           tests/integration/test_cache_behavior.py

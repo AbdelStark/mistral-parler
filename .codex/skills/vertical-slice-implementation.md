@@ -1,20 +1,20 @@
 ---
 name: vertical-slice-implementation
-description: Build the missing `parler/` runtime package in narrow, test-backed phases. Use when creating new modules, bootstrapping the package skeleton, or turning one implementation-plan phase green without over-scaffolding unrelated domains.
+description: Extend the existing `parler/` runtime package in narrow, test-backed phases. Use when implementing the next slice from `IMPLEMENTATION_PLAN.md` without over-scaffolding unrelated domains.
 prerequisites: mkdir, pytest, ruff, mypy
 ---
 
 # Vertical Slice Implementation
 
 <purpose>
-Grow `parler/` from nothing into the module map defined by `SDD.md`, one constrained phase at a time. This skill is for implementation work, not contract debates.
+Grow the existing `parler/` runtime package through the remaining phases defined by `SDD.md`, one constrained slice at a time. This skill is for implementation work, not contract debates.
 </purpose>
 
 <context>
-- The repository is spec/test-first. The runtime package does not exist yet.
+- The repository is spec/test-first. The runtime package already exists through Phase 4.
 - `IMPLEMENTATION_PLAN.md` is the build order. Follow it.
-- Phase 1 stabilizes models/config/errors. Many later tests depend on that baseline.
-- The fastest wrong move is broad scaffolding that hides contract drift behind placeholders.
+- The current stable baseline already includes models, config, audio ingestion, transcription, attribution, orchestration, packaging, and compatibility shims.
+- The fastest wrong move is broad scaffolding that hides contract drift behind placeholders or rewrites settled seams.
 </context>
 
 <procedure>
@@ -22,8 +22,9 @@ Grow `parler/` from nothing into the module map defined by `SDD.md`, one constra
 2. Read the phase objective, module list, and exact tests listed for that phase.
 3. Create only the required package directories and `__init__.py` files for that slice.
 4. Implement the smallest complete seam first:
-   - Phase 1: `models.py`, `errors.py`, `config.py`, hashing/serialization helpers
-   - Phase 2+: pure helpers before adapters; adapters before orchestrator glue
+   - extend pure helpers before adapters
+   - extend adapters before orchestrator glue
+   - prefer adding one real domain module over widening multiple partial stubs
 5. Add compatibility shims if import drift blocks the test surface.
 6. Run the narrowest tests first; expand only after the slice is green.
 7. Finish with `ruff check .` and `mypy parler/`.
@@ -44,43 +45,40 @@ Grow `parler/` from nothing into the module map defined by `SDD.md`, one constra
 </patterns>
 
 <examples>
-Example: Phase 1 bootstrap
+Example: Phase 4 attribution slice
 
 ```text
 Create:
-- parler/__init__.py
-- parler/models.py
-- parler/errors.py
-- parler/config.py
-- parler/util/__init__.py
-- parler/util/hashing.py
-- parler/util/serialization.py
+- parler/attribution/__init__.py
+- parler/attribution/attributor.py
+- parler/attribution/resolver.py
+- parler/prompts/attribution.py
+- parler/transcription/attributor.py  # compatibility shim
 
 Run:
-- pytest tests/unit/test_config_loading.py -q
-- pytest tests/unit/test_pipeline_orchestration.py -q -k "ProcessingState or checkpoint"
+- pytest tests/unit/test_speaker_attribution.py -q
+- pytest tests/unit/test_pipeline_orchestration.py -q -k "attribute or no_diarize"
 ```
 
-Example: Phase 2 audio slice
+Example: Phase 5 extraction slice
 
 ```text
 Create:
-- parler/audio/__init__.py
-- parler/audio/ingester.py
-- parler/audio/ffmpeg.py
-- parler/utils/__init__.py  # compatibility if retry tests still import parler.utils.retry
-- parler/utils/retry.py
+- parler/extraction/extractor.py
+- parler/extraction/parser.py
+- parler/extraction/deduper.py
+- parler/extraction/deadline_resolver.py
 
 Run:
-- pytest tests/unit/test_audio_ingestion.py -q
-- pytest tests/integration/test_retry_behavior.py -q
+- pytest tests/unit/test_decision_extraction_parsing.py -q
+- pytest tests/integration/test_mistral_extraction.py -q
 ```
 </examples>
 
 <troubleshooting>
 | Symptom | Cause | Fix |
 |---|---|---|
-| Install/test commands fail before any assertions run | `parler/` is absent | create the minimal package skeleton for the active phase |
+| Install/test commands fail before any assertions run | new module/export is missing from the existing package | add only the files and exports required for the active slice |
 | Later-phase tests fail while early-phase tests still fail | slice order violation | go back to the earliest red test in the implementation plan |
 | Too many unrelated import errors after scaffolding | over-scaffolded tree with missing exports | shrink scope and add only the imports the active tests need |
 </troubleshooting>
@@ -88,8 +86,7 @@ Run:
 <references>
 - `IMPLEMENTATION_PLAN.md`: ordered phase plan
 - `SDD.md`: canonical module map and data contracts
-- `tests/unit/test_config_loading.py`: Phase 1 anchor
-- `tests/unit/test_audio_ingestion.py`: Phase 2 anchor
+- `tests/unit/test_speaker_attribution.py`: Phase 4 anchor
 - `tests/unit/test_decision_extraction_parsing.py`: Phase 5 parser anchor
 - `tests/unit/test_pipeline_orchestration.py`: orchestrator/state anchor
 </references>
