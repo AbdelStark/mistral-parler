@@ -1,0 +1,58 @@
+{
+  "_comment": "Expected DecisionLog for fr_meeting_5min.mp3. Used as regression baseline in E2E tests.",
+  "_generated": "2026-04-09",
+  "_fixture_audio": "fr_meeting_5min.mp3",
+  "decisions": [
+    {
+      "id": "D1",
+      "summary": "Launch date set to May 15",
+      "timestamp_s": 80.0,
+      "speaker": "Pierre",
+      "confirmed_by": ["Sophie"],
+      "quote": "On part sur le 15 mai pour le lancement, c'est décidé.",
+      "confidence": "high",
+      "language": "fr"
+    }
+  ],
+  "commitments": [
+    {
+      "id": "C1",
+      "owner": "Sophie",
+      "action": "Review the deployment checklist",
+      "deadline": {
+        "raw": "vendredi prochain",
+        "resolved_date": "2026-04-17",
+        "is_explicit": false
+      },
+      "timestamp_s": 150.0,
+      "quote": "Je vais revoir la checklist avant vendredi prochain.",
+      "confidence": "high",
+      "language": "fr"
+    }
+  ],
+  "rejected": [
+    {
+      "id": "R1",
+      "summary": "March soft launch rejected due to team capacity",
+      "timestamp_s": 240.0,
+      "quote": "Non, on ne peut pas faire ça en mars.",
+      "confidence": "high",
+      "language": "fr"
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q1",
+      "question": "Who owns the database schema migration?",
+      "asked_by": "Pierre",
+      "timestamp_s": 270.0,
+      "quote": "Qui s'occupe de la migration de la base de données ?",
+      "language": "fr"
+    }
+  ],
+  "_tolerance": {
+    "decision_count": 1,
+    "commitment_count": 1,
+    "note": "LLM extraction has ±1 variance on count. Regression test uses abs(actual - expected) <= 1."
+  }
+}
