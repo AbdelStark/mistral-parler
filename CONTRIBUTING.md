@@ -14,7 +14,7 @@ This creates `.venv/` and installs the project in editable mode.
 ## Common commands
 
 ```bash
-uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/integration/test_retry_behavior.py -q
+uv run pytest tests/unit/test_config_loading.py tests/unit/test_report_rendering.py tests/unit/test_pipeline_orchestration.py tests/unit/test_audio_ingestion.py tests/unit/test_chunk_assembly.py tests/unit/test_transcript_quality.py tests/integration/test_retry_behavior.py tests/integration/test_voxtral_integration.py tests/integration/test_cache_behavior.py -q
 uv run python tests/smoke_test.py
 uv run ruff check parler tests/smoke_test.py
 uv run ruff format --check parler tests/smoke_test.py

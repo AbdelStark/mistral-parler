@@ -26,14 +26,9 @@ from ..models import (
     TranscriptSegment,
 )
 from ..rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
+from ..transcription.cache import TranscriptCache
+from ..transcription.transcriber import VoxtralTranscriber
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
-
-
-class VoxtralTranscriber:
-    def transcribe(
-        self, audio_file: AudioFile
-    ) -> Transcript:  # pragma: no cover - implementation follows later
-        raise NotImplementedError("VoxtralTranscriber is not implemented yet")
 
 
 class SpeakerAttributor:
@@ -317,10 +312,26 @@ class PipelineOrchestrator:
             ):
                 return None
 
-            transcriber = VoxtralTranscriber()
+            transcript_cache = None
+            if self.config.cache.enabled:
+                transcript_cache = TranscriptCache(
+                    cache_dir=self.config.cache.directory,
+                    ttl_days=self.config.cache.ttl_days,
+                )
+
+            transcriber = VoxtralTranscriber(
+                api_key=self.config.api_key,
+                model=self.config.transcription.model,
+                max_chunk_s=self.config.chunking.max_chunk_s,
+                max_retries=self.config.transcription.max_retries,
+                cache=transcript_cache,
+            )
             transcript = self._run_stage(
                 PipelineStage.TRANSCRIBE,
-                lambda: transcriber.transcribe(audio_file),
+                lambda: transcriber.transcribe(
+                    audio_file,
+                    languages=self.config.transcription.languages or None,
+                ),
                 on_stage_start=on_stage_start,
                 on_stage_complete=on_stage_complete,
             )

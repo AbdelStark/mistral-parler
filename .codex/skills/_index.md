@@ -35,9 +35,9 @@ Lower-priority recommended skills not scaffolded yet:
 
 ## Known Baseline Risks
 
-- Phase 1 and Phase 2 exist, but later domains are still missing: transcription, attribution, extraction, exports, and cache logic.
+- Phase 1 through Phase 3 exist, but later domains are still missing: attribution, decision extraction, exports, and the broader CLI/report flows built on top of them.
 - E2E fixture assets listed in `tests/fixtures/README.md` are not committed yet.
 - Tests and docs still drift on module names: `assembly` vs `assembler`, `attribution` vs `transcription.attributor`, and `util` vs `utils`.
 - `PipelineConfig` compatibility is currently provided by aliasing `ParlerConfig`.
 - `uv`, `uv_build`, `PyYAML`, and `requests` are now declared and validated; keep future tooling changes inside the same packaging model.
-- CI intentionally validates only the implemented Phase 1/2 slice; widen it only when later domains are actually delivered.
+- CI intentionally validates only the implemented Phase 1-3 slice; widen it only when later domains are actually delivered.

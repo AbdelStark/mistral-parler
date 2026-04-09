@@ -2,7 +2,7 @@
 
 > Multilingual voice intelligence built on Voxtral. Decision logs from French/English meetings and earnings calls.
 
-**Status: Alpha.** Phase 1 and Phase 2 are implemented: typed models, config loading, rendering, orchestration baseline, audio ingestion, retry utilities, and `uv`-based packaging/publishing. Voxtral transcription, speaker attribution, decision extraction, and export adapters remain in later phases.
+**Status: Alpha.** Phase 1 through Phase 3 are implemented: typed models, config loading, rendering, orchestration baseline, audio ingestion, retry utilities, Voxtral transcription, transcript quality evaluation, semantic caching, and `uv`-based packaging/publishing. Speaker attribution, decision extraction, and export adapters remain in later phases.
 
 The canonical sources of truth are:
 
@@ -88,13 +88,17 @@ uv run pytest \
   tests/unit/test_report_rendering.py \
   tests/unit/test_pipeline_orchestration.py \
   tests/unit/test_audio_ingestion.py \
-  tests/integration/test_retry_behavior.py -q
+  tests/unit/test_chunk_assembly.py \
+  tests/unit/test_transcript_quality.py \
+  tests/integration/test_retry_behavior.py \
+  tests/integration/test_voxtral_integration.py \
+  tests/integration/test_cache_behavior.py -q
 
 # Build distributable artifacts
 uv build
 ```
 
-`parler process ...` is wired through the real CLI and orchestration path, but later billable stages still raise `NotImplementedError` until Phase 3+ lands.
+The library transcription subsystem is now implemented and test-backed. `parler process ...` is wired through the real CLI and orchestration path, but later stages after transcription still raise `NotImplementedError` until Phase 4+ lands.
 
 ## Design
 
