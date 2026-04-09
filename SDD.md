@@ -1,559 +1,199 @@
 # parler — Software Design Document
 
-**Version**: 0.1.0  
-**Status**: Draft  
-**Date**: 2026-04-09  
-**Authors**: Design phase — pre-implementation
+**Version**: 0.2.0
+**Status**: Implementation-ready baseline
+**Date**: 2026-04-09
+
+This document defines the canonical software design for `parler`.
+
+It resolves the main inconsistencies present in the draft artefacts:
+
+- one canonical internal data model
+- one canonical cache-key policy
+- one explicit checkpoint model
+- one explicit contract for current Mistral API constraints and capabilities
 
 ---
 
-## Table of Contents
+## 1. Design Principles
 
-1. [Purpose and Scope](#1-purpose-and-scope)
-2. [System Context](#2-system-context)
-3. [Architectural Decisions Record](#3-architectural-decisions-record)
-4. [Component Design](#4-component-design)
-5. [Data Models](#5-data-models)
-6. [State Machine](#6-state-machine)
-7. [API Contracts](#7-api-contracts)
-8. [Configuration Schema](#8-configuration-schema)
-9. [Error Taxonomy](#9-error-taxonomy)
-10. [Performance Budget](#10-performance-budget)
-11. [Security and Privacy Model](#11-security-and-privacy-model)
-12. [Dependency Graph](#12-dependency-graph)
-13. [Testing Strategy](#13-testing-strategy)
-14. [Observability](#14-observability)
+### 1.1 Deterministic where it matters
 
----
+- configuration loading is deterministic
+- cache keys are stable and fully derived from semantic inputs
+- extraction uses structured output mode and parser normalization
 
-## 1. Purpose and Scope
+### 1.2 Explicit degradation
 
-### 1.1 Problem statement
+`parler` must degrade visibly, not silently:
 
-`parler` solves a specific, painful gap in the European knowledge-work market: **voice recordings that should produce decisions produce summaries instead**.
+- unknown speaker remains `Unknown`
+- unresolved deadline remains `None`
+- malformed LLM items are dropped with warnings
+- low transcript quality emits warnings or hard-stop prompts
 
-The failure is twofold:
-1. **Language failure**: transcription tools trained predominantly on English data degrade sharply on French, German, Spanish, Italian, and mixed-language (code-switching) audio. Phoneme confusion, name mangling, and technical vocabulary errors are pervasive.
-2. **Abstraction failure**: even when transcription is correct, tools produce summaries ("the team discussed X") rather than structured decisions ("the team decided X; @person owns it by date"). Summaries require interpretation; decisions require action.
+### 1.3 Local artefacts are first-class
 
-`parler` addresses both failures by building on Voxtral (Mistral's natively multilingual voice model) and applying a structured decision-extraction pass that distinguishes commitment from discussion.
+The local filesystem is part of the product design:
 
-### 1.2 Primary use cases
+- cache is deliberate, inspectable state
+- checkpoint is deliberate, inspectable state
+- reports are durable outputs
 
-| Use case | User | Input | Expected output |
-|----------|------|-------|----------------|
-| Weekly team meeting | French tech team | 45-min Zoom recording | Decision log + commitment table |
-| Earnings call analysis | Finance analyst | 90-min public earnings call | Decision log + commitment tracker |
-| Sales call review | Account executive | 30-min call recording | Commitments + open questions |
-| Board meeting minutes | Executive assistant | 2-hour board recording | Full decision log for minutes |
-| Podcast intelligence | Developer/researcher | Public podcast episode | Key statements and positions |
+### 1.4 Thin external boundary, strong internal normalization
 
-### 1.3 Out of scope (v1)
-
-- Real-time / streaming transcription of live meetings
-- Audio capture from screen (requires OS-level permission complexity)
-- Speaker identification via voice biometrics (privacy-sensitive; deferred)
-- Custom vocabulary injection (Voxtral API limitation)
-- Translation (transcription language = source language only)
-- Processing audio longer than 4 hours in a single run
+Vendor APIs, exports, and CLI parsing are adapters. Internal logic runs on typed,
+normalized models.
 
 ---
 
-## 2. System Context
+## 2. Canonical Module Map
 
-### 2.1 System context diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        EXTERNAL USERS                                │
-│                                                                      │
-│  Developer/Analyst ─────────────────────────────────────────────    │
-│       │ parler CLI / Python API                                  │  │
-└───────┼──────────────────────────────────────────────────────────┘  │
-        │                                                              │
-        ▼                                                              │
-┌───────────────────────────────────────────────────────────────────┐  │
-│                         parler                                    │  │
-│                                                                   │  │
-│  ┌──────────┐  ┌────────────┐  ┌──────────────┐  ┌───────────┐  │  │
-│  │  Audio   │  │  Voxtral   │  │   Decision   │  │  Report   │  │  │
-│  │ Ingestion│→ │Transcriber │→ │  Extractor   │→ │ Renderer  │  │  │
-│  └──────────┘  └────────────┘  └──────────────┘  └───────────┘  │  │
-│       │              │               │                │           │  │
-│       │              │               │                │           │  │
-└───────┼──────────────┼───────────────┼────────────────┼───────────┘  │
-        │              │               │                │              │
-        ▼              ▼               ▼                ▼              │
-  Local filesystem   Voxtral API    Mistral API     Local files /      │
-  FFmpeg (optional)  (Mistral La    (mistral-       export APIs        │
-  HTTP (for URLs)    Plateforme)    large-latest)   (Notion/Linear)    │
-```
-
-### 2.2 Deployment model
-
-`parler` is a local CLI tool. There is no server, no daemon, no cloud sync. All state is local to the user's machine.
-
-```
-~/.cache/parler/
-  transcripts/               # Voxtral transcription cache (keyed by audio hash)
-    <sha256-prefix>.json
-  extractions/               # Decision extraction cache (keyed by transcript hash + prompt version)
-    <sha256-prefix>.json
-  geodata/                   # (certifiable integration) ASN → country data
-    asn-country-map.mmdb
-
-./.parler-state.json         # Per-run pipeline state checkpoint (working directory)
+```text
+parler/
+  __init__.py
+  cli.py
+  config.py
+  errors.py
+  models.py
+  prompts/
+    extraction.py
+    attribution.py
+  audio/
+    ingester.py
+    ffmpeg.py
+  transcription/
+    transcriber.py
+    assembly.py
+    cache.py
+    quality.py
+  attribution/
+    attributor.py
+    resolver.py
+  extraction/
+    extractor.py
+    parser.py
+    cache.py
+    deadline_resolver.py
+  rendering/
+    renderer.py
+    templates/
+  export/
+    notion.py
+    linear.py
+    jira.py
+    slack.py
+  pipeline/
+    orchestrator.py
+    state.py
+  util/
+    hashing.py
+    serialization.py
+    retry.py
 ```
 
-### 2.3 Integration surfaces
-
-| Surface | Direction | Protocol | Auth |
-|---------|-----------|----------|------|
-| Voxtral API | outbound | HTTPS/REST | `MISTRAL_API_KEY` |
-| Mistral Chat API | outbound | HTTPS/REST | `MISTRAL_API_KEY` |
-| Local filesystem | bidirectional | POSIX file I/O | none |
-| FFmpeg | outbound | subprocess | none |
-| Notion API | outbound | HTTPS/REST | `NOTION_API_KEY` |
-| Linear API | outbound | HTTPS/GraphQL | `LINEAR_API_KEY` |
-| Jira API | outbound | HTTPS/REST | `JIRA_EMAIL` + `JIRA_API_TOKEN` |
-| Slack Webhooks | outbound | HTTPS/POST | `SLACK_WEBHOOK_URL` |
+Compatibility shims may be added for draft test imports such as
+`parler.transcription.attributor`.
 
 ---
 
-## 3. Architectural Decisions Record
+## 3. Architecture Overview
 
-### ADR-001: LLM-based diarization over pyannote
-
-**Decision**: Use Mistral LLM to attribute speaker turns from transcript text rather than a local voice-diarization ML model.
-
-**Context**: Speaker attribution requires either (a) acoustic analysis (voice fingerprinting, separation) or (b) linguistic analysis (who said what based on text context). Option (a) is more accurate for audio with multiple simultaneous speakers or low-quality audio; option (b) is sufficient for structured business meetings with named participants.
-
-**Consequence**: Installation is 5× simpler. Accuracy is adequate for structured meetings (the primary use case). A `parler[diarize]` optional extra will add pyannote support for users who need higher accuracy.
-
-**Supersedes**: N/A. **Status**: Accepted.
-
----
-
-### ADR-002: Separate transcription and extraction caches
-
-**Decision**: Cache the Voxtral transcript separately from the Mistral extraction result, keyed by different hashes.
-
-**Context**: A user may want to re-run extraction with a different system prompt (e.g., trying a more aggressive decision-confidence threshold) without paying for re-transcription. Transcription is the expensive step ($0.15 for 45 minutes); extraction is cheaper ($0.08) and prompt-sensitive.
-
-**Consequence**: Two cache directories. The extraction cache key includes a hash of the extraction prompt version, so prompt changes automatically invalidate only the extraction cache, not the transcript.
-
-**Status**: Accepted.
-
----
-
-### ADR-003: Single Mistral API key for both Voxtral and chat
-
-**Decision**: Use a single `MISTRAL_API_KEY` environment variable for both the Voxtral transcription API and the Mistral chat API.
-
-**Context**: Both services are under Mistral La Plateforme and use the same key. Requiring two separate keys would be confusing and unnecessary.
-
-**Consequence**: If the user's API key is rate-limited on Voxtral, it will also be rate-limited on chat. In practice, these are likely different rate-limit buckets, but the user only needs to manage one key.
-
-**Status**: Accepted.
-
----
-
-### ADR-004: Resumable pipeline via .parler-state.json checkpoint
-
-**Decision**: Write a `.parler-state.json` checkpoint file to the current working directory that allows `--resume` to pick up where a failed run left off.
-
-**Context**: A 2-hour earnings call takes ~3 minutes to transcribe. If the extraction or rendering fails after transcription, the user should not need to re-transcribe. The checkpoint file captures the `ProcessingState` at each stage boundary.
-
-**Consequence**: Working directories accumulate `.parler-state.json` files. Document in README that these can be safely deleted. Add `.parler-state.json` to global `.gitignore` recommendations.
-
-**Status**: Accepted.
-
----
-
-### ADR-005: Strip reasoning traces from output before returning to application
-
-**Decision**: When explanation mode is active (future, certifiable integration), strip `<certifiable:reasoning>` blocks from the model output before it reaches the decision extraction logic.
-
-**Context**: The decision extraction logic parses model outputs for decisions and commitments. Leaving reasoning traces embedded in the output would cause them to be extracted as spurious "decisions" or "commitments."
-
-**Consequence**: The extraction logic receives clean output. The reasoning trace is stored separately in the audit log (certifiable integration) and is not visible to the extractor.
-
-**Status**: Accepted (forward-looking, not yet implemented).
-
----
-
-## 4. Component Design
-
-### 4.1 AudioIngester
-
-**Responsibility**: resolve the input (path, URL, or stdin) to a normalized audio file; detect format; chunk if necessary.
-
-**Interface**:
-```python
-class AudioIngester:
-    def __init__(self, config: ParlerConfig): ...
-    
-    def ingest(self, source: str) -> AudioIngestionResult:
-        """
-        source: local path, http/https URL, or "-" for stdin.
-        Returns AudioIngestionResult with all fields populated.
-        Never raises for audio quality issues (those are warnings);
-        raises only for unrecoverable errors (file not found, network failure).
-        """
-    
-    def estimate_chunking(self, metadata: AudioMetadata) -> ChunkPlan:
-        """
-        Given audio metadata, produce a chunking plan without reading the full file.
-        Used by --cost-estimate to predict API call count.
-        """
+```text
+CLI / Python API
+  -> Config Loader
+  -> PipelineOrchestrator
+       -> AudioIngester
+       -> VoxtralTranscriber
+       -> TranscriptQualityChecker
+       -> SpeakerAttributor
+       -> DecisionExtractor
+       -> ReportRenderer
+       -> Export adapters
 ```
 
-**State**: stateless. Each `ingest()` call is independent.
-
-**Side effects**: 
-- May write temporary files to `tempfile.gettempdir()` for format conversion (FFmpeg) and URL downloads
-- Temporary files are registered in `AudioIngestionResult.temp_files` for cleanup
-
-**Invariants**:
-- Output file path is always in a supported Voxtral format (`mp3`, `mp4`, `m4a`, `wav`, `ogg`, `webm`)
-- Output file is always readable by the current process
-- `AudioMetadata.duration_s` is always populated (never None after successful ingestion)
+The orchestrator owns sequencing, checkpointing, cache interactions, and failure
+isolation. Individual components are intentionally narrow.
 
 ---
 
-### 4.2 VoxtralTranscriber
+## 4. Canonical Data Model
 
-**Responsibility**: send audio chunks to the Voxtral API; cache results; assemble chunked transcripts.
-
-**Interface**:
-```python
-class VoxtralTranscriber:
-    def __init__(self, client: Mistral, config: ParlerConfig, cache: TranscriptCache): ...
-    
-    def transcribe(self, ingestion: AudioIngestionResult) -> Transcript:
-        """
-        Transcribes all chunks, caches each result, assembles into a single Transcript.
-        Progress is reported via config.progress_callback if set.
-        """
-    
-    def transcribe_chunk(self, chunk: AudioChunk) -> RawVoxtralResponse:
-        """
-        Single chunk transcription. Cached by chunk content hash.
-        Retries on transient errors per config.retry_policy.
-        """
-    
-    def assemble(self, chunk_responses: list[RawVoxtralResponse], plan: ChunkPlan) -> Transcript:
-        """
-        Merges overlapping segments from adjacent chunks.
-        Deduplicates by timestamp and confidence.
-        """
-```
-
-**State**: stateless except for the injected cache. Thread-safe (cache is responsible for its own thread-safety).
-
-**Retry policy**: exponential backoff with jitter on HTTP 429 and 5xx. Raises `VoxtralAPIError` after `config.retry_policy.max_attempts` failures.
-
-**Cache contract**: cache read/write is always keyed by `sha256(chunk_bytes)[:16] + "-" + voxtral_model_version`. A cache miss triggers a Voxtral API call; a cache hit skips it entirely.
-
----
-
-### 4.3 SpeakerAttributor
-
-**Responsibility**: assign speaker labels to transcript segments using LLM-based linguistic analysis.
-
-**Interface**:
-```python
-class SpeakerAttributor:
-    def __init__(self, client: Mistral, config: ParlerConfig): ...
-    
-    def attribute(self, transcript: Transcript, participants: list[str] | None = None) -> Transcript:
-        """
-        Returns a new Transcript with speaker_id populated on segments.
-        Does not modify the input transcript (immutable update).
-        """
-    
-    def extract_names(self, transcript: Transcript) -> list[ParticipantCandidate]:
-        """
-        First pass: extract names from the transcript text.
-        Returns candidates with role (speaker | mentioned) and aliases.
-        """
-    
-    def assign_turns(
-        self,
-        transcript: Transcript,
-        participants: list[ParticipantCandidate]
-    ) -> list[SpeakerAttribution]:
-        """
-        Second pass: assign each segment to a participant.
-        Returns ordered attributions matching transcript segment order.
-        """
-```
-
-**State**: stateless.
-
-**Confidence contract**: if the LLM cannot attribute a segment with at least `medium` confidence, the segment's `speaker_id` is set to `"Unknown"`. Unknown segments are never forced into an attribution.
-
-**LLM call count**: exactly 2 Mistral calls per `attribute()` invocation (name extraction + turn assignment), regardless of transcript length.
-
----
-
-### 4.4 DecisionExtractor
-
-**Responsibility**: extract structured decisions, commitments, rejections, and open questions from an attributed transcript.
-
-**Interface**:
-```python
-class DecisionExtractor:
-    def __init__(self, client: Mistral, config: ParlerConfig, cache: ExtractionCache): ...
-    
-    def extract(self, transcript: Transcript, meeting_date: date | None = None) -> DecisionLog:
-        """
-        Extracts structured decision log from transcript.
-        Uses single-pass for transcripts < 25,000 words; multi-pass for longer.
-        Resolves relative deadlines using meeting_date (or today if None).
-        """
-    
-    def _single_pass_extract(self, transcript: Transcript) -> RawDecisionLog: ...
-    def _multi_pass_extract(self, transcript: Transcript) -> RawDecisionLog: ...
-    def _resolve_deadlines(self, raw: RawDecisionLog, meeting_date: date) -> DecisionLog: ...
-    def _validate_output(self, raw: dict) -> RawDecisionLog: ...
-```
-
-**State**: stateless except for the injected cache.
-
-**Validation contract**: the raw LLM JSON output is validated against the `RawDecisionLog` Pydantic model before use. Invalid fields are silently dropped (not propagated as errors) with a warning log. The extraction never fails due to a partial or malformed LLM response — it degrades gracefully to an empty section.
-
-**Cache key**: `sha256(transcript.text + extraction_prompt.version)[:16]`. Cache hits skip the Mistral API call entirely.
-
----
-
-### 4.5 ReportRenderer
-
-**Responsibility**: render a `DecisionLog` (+ `AudioMetadata`) into one of the supported output formats.
-
-**Interface**:
-```python
-class ReportRenderer:
-    def __init__(self, config: ParlerConfig): ...
-    
-    def render(
-        self,
-        log: DecisionLog,
-        audio: AudioMetadata,
-        format: Literal["markdown", "html", "json"]
-    ) -> str:
-        """
-        Returns the rendered report as a string.
-        For JSON: valid JSON. For Markdown/HTML: UTF-8 string.
-        Never raises for empty decision logs (renders an empty report).
-        """
-    
-    def render_to_file(
-        self,
-        log: DecisionLog,
-        audio: AudioMetadata,
-        output_path: Path
-    ) -> None:
-        """
-        Renders and writes to path. Infers format from file extension.
-        """
-```
-
-**State**: stateless.
-
-**Template engine**: Jinja2 for HTML. Custom formatter for Markdown (no template engine — simpler and more predictable for table generation).
-
-**HTML contract**: the HTML output is a single self-contained file. No external CSS, no web fonts, no JavaScript (except minimal inline JS for collapsible sections). Must render correctly when opened as a local file with `file://` protocol.
-
----
-
-### 4.6 ExportManager
-
-**Responsibility**: export a `DecisionLog` to external task management or communication tools.
-
-**Interface**:
-```python
-class ExportManager:
-    def __init__(self, config: ParlerConfig): ...
-    
-    def export(
-        self,
-        log: DecisionLog,
-        audio: AudioMetadata,
-        target: Literal["notion", "linear", "jira", "slack"]
-    ) -> ExportResult: ...
-```
-
-**State**: stateless.
-
-**Failure isolation**: export failures are non-fatal. If the Notion API call fails, the CLI prints a warning and exits 0 (the report was already generated successfully). The `ExportResult` contains a success flag and error details.
-
----
-
-### 4.7 PipelineOrchestrator
-
-**Responsibility**: coordinate the pipeline stages, manage the checkpoint, enforce configuration, and report progress.
-
-**Interface**:
-```python
-class PipelineOrchestrator:
-    def __init__(
-        self,
-        config: ParlerConfig,
-        ingester: AudioIngester,
-        transcriber: VoxtralTranscriber,
-        attributor: SpeakerAttributor,
-        extractor: DecisionExtractor,
-        renderer: ReportRenderer
-    ): ...
-    
-    def run(self, source: str, output_path: Path | None = None) -> PipelineResult: ...
-    def resume(self, state_path: Path) -> PipelineResult: ...
-    def estimate_cost(self, source: str) -> CostEstimate: ...
-```
-
-**State**: writes `.parler-state.json` checkpoint to the output directory after each completed stage.
-
-**Checkpoint contract**: if `state_path` is provided and exists, the orchestrator reads it and skips all stages whose output is already in the checkpoint. A stage is re-run if and only if its output is absent from the checkpoint.
-
----
-
-## 5. Data Models
-
-### 5.1 Complete type definitions
+### 4.1 Audio
 
 ```python
-from dataclasses import dataclass, field
-from datetime import date, datetime
-from typing import Literal
-from pathlib import Path
-
-
-# ─── Audio ───────────────────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
-class AudioChunk:
-    index: int                  # 0-indexed
+class AudioFile:
     path: Path
-    start_s: float
-    end_s: float
-    duration_s: float           # = end_s - start_s
-    overlap_start_s: float      # seconds of overlap with prev chunk (0 for first)
-    overlap_end_s: float        # seconds of overlap with next chunk (0 for last)
-    content_hash: str           # sha256[:16] of file bytes
-
-
-@dataclass(frozen=True)
-class AudioMetadata:
-    path: Path
-    original_path: Path         # before any format conversion
-    format: str                 # "mp3", "wav", "mp4", etc.
+    original_path: Path | None
+    format: str
     duration_s: float
     sample_rate: int
-    channels: int               # 1 = mono, 2 = stereo
-    bitrate_kbps: int | None
-    title: str | None
-    recording_date: date | None
-    temp_files: tuple[Path, ...]  # to be cleaned up after run
-    needs_chunking: bool
-    chunk_plan: ChunkPlan | None
+    channels: int
+    size_bytes: int
+    content_hash: str
+```
 
+Notes:
 
-@dataclass(frozen=True)
-class ChunkPlan:
-    chunks: tuple[AudioChunk, ...]
-    max_chunk_s: float
-    overlap_s: float
-    split_on_silence: bool
+- `content_hash` is `sha256(file_bytes)[:16]`
+- `original_path` is populated when FFmpeg normalization creates a new artefact
 
+### 4.2 Transcript
 
-# ─── Transcript ───────────────────────────────────────────────────────────────
-
+```python
 @dataclass(frozen=True)
 class TranscriptWord:
     word: str
     start_s: float
     end_s: float
-    probability: float          # 0.0 - 1.0
+    probability: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class TranscriptSegment:
-    id: int                     # sequential, 0-indexed
+    id: int
     start_s: float
     end_s: float
     text: str
-    language: str               # ISO 639-1: "fr", "en", "de", etc.
-    speaker_id: str | None      # None until SpeakerAttributor runs
+    language: str
+    speaker_id: str | None
     speaker_confidence: Literal["high", "medium", "low", "unknown"] | None
-    confidence: float           # 0.0 - 1.0 (mapped from Voxtral logprob)
-    no_speech_prob: float       # 0.0 - 1.0
-    code_switch: bool           # True if segment contains multiple languages
-    words: list[TranscriptWord] | None  # word-level, if available
+    confidence: float
+    no_speech_prob: float
+    code_switch: bool
+    words: tuple[TranscriptWord, ...] | None
 
 
 @dataclass(frozen=True)
 class Transcript:
+    text: str
+    language: str
+    detected_languages: tuple[str, ...]
     duration_s: float
-    primary_language: str
-    detected_languages: tuple[str, ...]   # all languages detected
     segments: tuple[TranscriptSegment, ...]
-    voxtral_model: str
-    content_hash: str           # sha256[:16] of full transcript text (for cache key)
-    
-    @property
-    def text(self) -> str:
-        return " ".join(s.text for s in self.segments)
-    
-    @property
-    def word_count(self) -> int:
-        return len(self.text.split())
-    
-    @property
-    def avg_confidence(self) -> float:
-        speech_segments = [s for s in self.segments if s.no_speech_prob < 0.5]
-        if not speech_segments:
-            return 0.0
-        return sum(s.confidence for s in speech_segments) / len(speech_segments)
-    
-    @property
-    def speakers(self) -> list[str]:
-        return sorted(set(
-            s.speaker_id for s in self.segments
-            if s.speaker_id and s.speaker_id != "Unknown"
-        ))
+    model: str
+    content_hash: str
+```
 
+Important aliases:
 
-# ─── Speaker Attribution ─────────────────────────────────────────────────────
+- `language` is the canonical internal field for dominant language
+- `primary_language` may exist as a property or serialized alias
 
-@dataclass(frozen=True)
-class ParticipantCandidate:
-    name: str
-    role: Literal["speaker", "mentioned"]
-    aliases: tuple[str, ...]
-    first_mention_s: float
+### 4.3 Decision log
 
-
-@dataclass(frozen=True)
-class SpeakerAttribution:
-    segment_id: int
-    speaker: str          # name or "Unknown"
-    confidence: Literal["high", "medium", "low", "unknown"]
-    method: Literal["explicit", "contextual", "inferred", "unknown"]
-
-
-# ─── Decision Log ────────────────────────────────────────────────────────────
-
+```python
 @dataclass(frozen=True)
 class CommitmentDeadline:
-    raw: str                    # verbatim as stated in meeting
-    resolved_date: date | None  # None if relative and unresolvable
-    is_explicit: bool           # True = exact date stated; False = relative
+    raw: str
+    resolved_date: date | None
+    is_explicit: bool
 
 
 @dataclass(frozen=True)
 class Decision:
-    id: str                     # "D1", "D2", ...
+    id: str
     summary: str
     timestamp_s: float | None
     speaker: str | None
@@ -565,7 +205,7 @@ class Decision:
 
 @dataclass(frozen=True)
 class Commitment:
-    id: str                     # "C1", "C2", ...
+    id: str
     owner: str
     action: str
     deadline: CommitmentDeadline | None
@@ -577,8 +217,8 @@ class Commitment:
 
 @dataclass(frozen=True)
 class Rejection:
-    id: str                     # "R1", "R2", ...
-    proposal: str
+    id: str
+    summary: str
     reason: str | None
     timestamp_s: float | None
     quote: str
@@ -588,8 +228,9 @@ class Rejection:
 
 @dataclass(frozen=True)
 class OpenQuestion:
-    id: str                     # "Q1", "Q2", ...
+    id: str
     question: str
+    asked_by: str | None
     stakes: str | None
     timestamp_s: float | None
     quote: str
@@ -601,10 +242,12 @@ class OpenQuestion:
 class ExtractionMetadata:
     model: str
     prompt_version: str
-    extracted_at: datetime
-    transcript_word_count: int
-    pass_count: int             # 1 for single-pass, 2+ for multi-pass
-    extraction_duration_ms: int
+    meeting_date: date | None
+    extracted_at: str
+    input_tokens: int
+    output_tokens: int
+    pass_count: int
+    parse_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -614,551 +257,375 @@ class DecisionLog:
     rejected: tuple[Rejection, ...]
     open_questions: tuple[OpenQuestion, ...]
     metadata: ExtractionMetadata
-    
-    @property
-    def total_items(self) -> int:
-        return len(self.decisions) + len(self.commitments) + len(self.rejected) + len(self.open_questions)
-    
-    @property
-    def is_empty(self) -> bool:
-        return self.total_items == 0
+```
 
+Derived properties:
 
-# ─── Pipeline State ───────────────────────────────────────────────────────────
+- `DecisionLog.total_items`
+- `DecisionLog.is_empty`
 
-@dataclass
+### 4.4 Processing state
+
+```python
+@dataclass(frozen=True)
 class ProcessingState:
-    schema_version: str = "0.1.0"
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    source: str = ""
-    config_hash: str = ""       # hash of ParlerConfig for invalidation
-    
-    # Completed stage outputs (None = stage not yet run)
-    audio: AudioMetadata | None = None
-    transcript: Transcript | None = None
-    decision_log: DecisionLog | None = None
-    
-    # Timing
-    ingestion_ms: int | None = None
-    transcription_ms: int | None = None
-    attribution_ms: int | None = None
-    extraction_ms: int | None = None
-    rendering_ms: int | None = None
-    
-    @property
-    def completed_stages(self) -> list[str]:
-        stages = []
-        if self.audio: stages.append("ingestion")
-        if self.transcript: stages.append("transcription")
-        if self.decision_log: stages.append("extraction")
-        return stages
+    audio_file: AudioFile | None
+    transcript: Transcript | None
+    attributed_transcript: Transcript | None
+    decision_log: DecisionLog | None
+    report: str | None
+    completed_stages: frozenset["PipelineStage"]
+    checkpoint_path: Path | None
 ```
+
+This shape intentionally matches the existing orchestration tests better than the older
+hash-only draft.
 
 ---
 
-## 6. State Machine
+## 5. Component Contracts
 
-### 6.1 Pipeline state transitions
+### 5.1 Config loader
 
-```
-                    ┌─────────────────────────────────────────────────────┐
-                    │                   PIPELINE STATES                   │
-                    └─────────────────────────────────────────────────────┘
+Responsibilities:
 
-IDLE ──────► INGESTING ──────► TRANSCRIBING ──────► ATTRIBUTING ──────► EXTRACTING ──────► RENDERING ──────► DONE
-              │    │              │    │                │    │              │    │              │    │
-              │    └──► ERROR     │    └──► ERROR       │    └──► ERROR    │    └──► ERROR    │    └──► ERROR
-              │          │        │          │           │          │       │          │       │
-              └──►CANCELLED      └──►CANCELLED          └──►CANCELLED     └──►CANCELLED      └──►CANCELLED
+- merge defaults, config file, env vars, and CLI overrides
+- validate cross-field constraints
+- scrub secrets from `repr` and `str`
 
-ERROR ──────► (user fixes issue) ──────► INGESTING (via --resume, skipping cached stages)
-```
+Canonical precedence:
 
-### 6.2 Stage skip conditions (for --resume)
+1. built-in defaults
+2. config file
+3. environment
+4. CLI overrides
 
-| Stage | Skip condition |
-|-------|---------------|
-| INGESTING | `state.audio` is not None AND source file unchanged (hash matches) |
-| TRANSCRIBING | `state.transcript` is not None AND `state.audio` matches current |
-| ATTRIBUTING | `--no-diarize` flag OR transcript has speakers populated |
-| EXTRACTING | `state.decision_log` is not None AND transcript hash matches cache key |
-| RENDERING | Never cached — always re-render from DecisionLog |
+Accepted config formats:
 
-### 6.3 Voxtral request state machine
+- TOML preferred
+- YAML accepted
+- JSON accepted
 
-```
-PENDING ──────► SENDING ──────► AWAITING_RESPONSE ──────► PARSING ──────► CACHED ──────► DONE
-                  │                    │                      │
-                  │                    ▼                      ▼
-                  │               RATE_LIMITED          PARSE_ERROR
-                  │                    │                      │
-                  │                    ▼                      ▼
-                  │              RETRY_WAIT              FAILED (non-retryable)
-                  │                    │
-                  └────────────────────┘ (up to max_attempts)
-```
+### 5.2 AudioIngester
+
+Responsibilities:
+
+- validate input existence and type
+- detect file format by magic bytes first, extension second
+- compute file size and content hash
+- run FFmpeg normalization for unsupported containers
+- probe duration, sample rate, and channel count
+
+Must raise:
+
+- `InputError` for bad input
+- `EnvironmentError` for missing FFmpeg when conversion is required
+
+### 5.3 VoxtralTranscriber
+
+Responsibilities:
+
+- build and execute transcription requests
+- apply bounded retries
+- write and read transcript cache
+- chunk long audio when request mode or operational policy demands it
+- assemble chunk outputs into a canonical transcript
+
+#### 5.3.1 Request strategy abstraction
+
+The implementation must hide current vendor constraints behind an internal request mode:
+
+- `timestamp_first`
+- `language_first`
+
+Default mode: `timestamp_first`
+
+Reason:
+
+- Mistral currently documents `timestamp_granularities` and explicit `language` as
+  incompatible on the offline path
+
+This must be explicit in code and test fixtures, not hardcoded implicitly.
+
+#### 5.3.2 Diarization policy
+
+When transcription-mode and vendor support allow it, request diarization from Voxtral.
+If diarization is unavailable or disabled, preserve any existing upstream `speaker_id`
+values and fall back to later name resolution heuristics.
+
+### 5.4 TranscriptQualityChecker
+
+Responsibilities:
+
+- compute duration-weighted mean confidence
+- compute no-speech ratio
+- identify contiguous low-confidence spans
+- emit `OK`, `WARN`, or `POOR`
+
+This is a pure local component and must never raise.
+
+### 5.5 SpeakerAttributor
+
+Responsibilities:
+
+- normalize opaque speaker labels into stable names
+- use participant hints when present
+- extract names from transcript cues
+- preserve segment IDs and timing
+- support deterministic anonymization
+
+Important rule:
+
+- attribution may improve names but must not collapse transcript segments
+- “speaker turns” are a rendering concept, not a mutation of the canonical transcript
+
+### 5.6 DecisionExtractor
+
+Responsibilities:
+
+- build structured extraction prompts
+- invoke chat completion in JSON mode
+- perform single-pass or multi-pass extraction
+- validate, normalize, and filter raw items
+- resolve deadlines against meeting date
+- write and read extraction cache
+
+Important rule:
+
+- parser normalization is part of the product contract, not a convenience layer
+
+### 5.7 ReportRenderer
+
+Responsibilities:
+
+- render Markdown, HTML, and JSON from the same `DecisionLog`
+- escape unsafe content in HTML
+- preserve empty sections with explicit placeholders where appropriate
+
+### 5.8 Export adapters
+
+Responsibilities:
+
+- translate canonical log into target-specific payloads
+- isolate export failures from local output success
 
 ---
 
-## 7. API Contracts
+## 6. Cache Contracts
 
-### 7.1 Voxtral transcription request
+### 6.1 Transcript cache key
 
-```http
-POST https://api.mistral.ai/v1/audio/transcriptions
-Authorization: Bearer <MISTRAL_API_KEY>
-Content-Type: multipart/form-data
+The draft cache key of `audio_hash + model` is too weak.
 
-file:                  <audio_file_bytes>
-model:                 "voxtral-v0.1"
-language:              "fr"           (optional; omit for auto-detect)
-response_format:       "verbose_json"
-timestamp_granularities: ["segment"]  (or ["word"] if available)
-```
+Canonical transcript cache key fingerprint must include:
 
-**Expected response** (200 OK):
-```json
-{
-  "text": "...",
-  "language": "fr",
-  "duration": 2843.0,
-  "segments": [
-    {
-      "id": 0,
-      "start": 0.0,
-      "end": 4.2,
-      "text": "Bonjour à tous, merci d'être là.",
-      "avg_logprob": -0.23,
-      "no_speech_prob": 0.02,
-      "words": null
-    }
-  ]
-}
-```
+- audio content hash
+- transcription model
+- request mode
+- diarization enabled/disabled
+- timestamp granularity mode
+- preprocessing fingerprint
+- context bias fingerprint
+- any explicit vendor parameter that can alter transcript semantics
 
-**Error handling**:
+### 6.2 Extraction cache key
 
-| HTTP status | Error type | Action |
-|-------------|-----------|--------|
-| 400 | `VoxtralBadRequestError` | Fail immediately. Log the request details. |
-| 401 | `AuthenticationError` | Fail immediately. Print "Check your MISTRAL_API_KEY." |
-| 413 | `FileTooLargeError` | Fail immediately. "Audio chunk exceeds API size limit. Reduce chunk size in config." |
-| 429 | `RateLimitError` | Retry after `Retry-After` header delay (or exponential backoff if header absent). |
-| 500, 502, 503 | `ServerError` | Retry with exponential backoff. |
-| 504 | `TimeoutError` | Retry with exponential backoff. Long audio may need extended timeout. |
+The draft key of `transcript_hash + prompt_version` is also too weak.
 
-### 7.2 Mistral chat completion request (decision extraction)
+Canonical extraction cache key fingerprint must include:
 
-```http
-POST https://api.mistral.ai/v1/chat/completions
-Authorization: Bearer <MISTRAL_API_KEY>
-Content-Type: application/json
+- transcript content hash
+- extraction model
+- prompt version
+- schema version
+- meeting date anchor
+- extraction policy version
+- normalization policy version
 
-{
-  "model": "mistral-large-latest",
-  "messages": [
-    {
-      "role": "system",
-      "content": "<EXTRACTION_SYSTEM_PROMPT>"
-    },
-    {
-      "role": "user",
-      "content": "TRANSCRIPT:\n<transcript_text>\n\nReturn JSON only."
-    }
-  ],
-  "response_format": { "type": "json_object" },
-  "temperature": 0.0,
-  "max_tokens": 4096
-}
-```
+### 6.3 Cache storage rules
 
-**Response validation**: the response JSON is validated against the `RawDecisionLog` Pydantic model. If validation fails:
-1. Log the full raw response at DEBUG level
-2. Attempt partial extraction from whatever fields are present
-3. Return a `DecisionLog` with only the valid fields populated
-4. Set `ExtractionMetadata.parse_warnings` with a description of what was invalid
+- stored as JSON on disk
+- expired entries are cache misses, not hard failures
+- cache clear supports all entries or one entry
+- cache read/write operations must be atomic at file level
 
 ---
 
-## 8. Configuration Schema
+## 7. Checkpoint Contract
 
-Complete `ParlerConfig` specification:
+### 7.1 Content
+
+Checkpoint files serialize real stage outputs:
+
+- `audio_file`
+- `transcript`
+- `attributed_transcript`
+- `decision_log`
+- `completed_stages`
+
+### 7.2 Security stance
+
+Checkpoint files are sensitive because they may contain transcript text and extracted
+meeting content. Therefore:
+
+- default filename: `.parler-state.json`
+- default location: current working directory unless explicitly overridden
+- file mode should be as restrictive as the platform allows
+- CLI help and docs must describe checkpoint sensitivity clearly
+
+### 7.3 Resume rules
+
+- resume is valid only if current audio content hash matches checkpoint audio hash
+- completed stages are skipped only when their serialized artefacts are present and valid
+- rendering is always replayed from canonical state
+
+---
+
+## 8. Error Model
+
+Use project-specific names that do not shadow Python built-ins.
 
 ```python
-@dataclass
-class RetryPolicy:
-    max_attempts: int = 3
-    initial_delay_s: float = 1.0
-    backoff_factor: float = 2.0
-    max_delay_s: float = 30.0
-    jitter: bool = True
+class ParlerError(Exception): ...
 
-
-@dataclass
-class ChunkingConfig:
-    max_chunk_s: float = 600.0           # 10 minutes
-    overlap_s: float = 30.0
-    split_on_silence: bool = True
-    silence_threshold_db: float = -30.0
-    silence_min_duration_s: float = 0.5
-    silence_search_window_s: float = 60.0  # how far from target split to look for silence
-
-
-@dataclass
-class TranscriptionConfig:
-    model: str = "voxtral-v0.1"
-    languages: list[str] = field(default_factory=list)  # empty = auto-detect
-    response_format: str = "verbose_json"
-    timestamp_granularities: list[str] = field(default_factory=lambda: ["segment"])
-    request_timeout_s: float = 120.0
-    retry: RetryPolicy = field(default_factory=RetryPolicy)
-
-
-@dataclass
-class AttributionConfig:
-    enabled: bool = True
-    confidence_threshold: Literal["high", "medium", "low"] = "medium"
-    model: str = "mistral-large-latest"
-    temperature: float = 0.0
-    use_local_diarize: bool = False      # requires certifiable[diarize]
-
-
-@dataclass
-class ExtractionConfig:
-    model: str = "mistral-large-latest"
-    temperature: float = 0.0
-    max_tokens: int = 4096
-    prompt_version: str = "v1"
-    confidence_threshold: Literal["high", "medium"] = "medium"
-    multi_pass_threshold_words: int = 25_000
-    retry: RetryPolicy = field(default_factory=RetryPolicy)
-
-
-@dataclass
-class CacheConfig:
-    enabled: bool = True
-    directory: Path = field(default_factory=lambda: Path.home() / ".cache" / "parler")
-    max_size_gb: float = 2.0
-    ttl_days: int | None = None         # None = no expiry
-
-
-@dataclass
-class OutputConfig:
-    format: Literal["markdown", "html", "json"] = "markdown"
-    output_path: Path | None = None     # None = auto-name from input
-    include_transcript: bool = False
-    include_quotes: bool = True
-    anonymize_speakers: bool = False
-    timezone: str = "UTC"               # for timestamp display
-
-
-@dataclass
-class CostConfig:
-    max_transcription_usd: float | None = None   # None = no cap
-    max_extraction_usd: float | None = None
-    confirm_above_usd: float = 1.0      # prompt before runs over this cost
-
-
-@dataclass
-class ParlerConfig:
-    # API
-    api_key: str = field(default_factory=lambda: os.environ.get("MISTRAL_API_KEY", ""))
-    api_base_url: str = "https://api.mistral.ai/v1"
-    
-    # Components
-    transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
-    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
-    attribution: AttributionConfig = field(default_factory=AttributionConfig)
-    extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
-    cache: CacheConfig = field(default_factory=CacheConfig)
-    output: OutputConfig = field(default_factory=OutputConfig)
-    cost: CostConfig = field(default_factory=CostConfig)
-    
-    # Runtime
-    participants: list[str] = field(default_factory=list)  # e.g. ["Pierre (PM)", "Sophie (Eng)"]
-    meeting_date: date | None = None    # for deadline resolution; defaults to today
-    verbose: bool = False
-    quiet: bool = False
-    yes: bool = False                   # skip confirmation prompts
-    progress_callback: Callable | None = None
+class InputError(ParlerError): ...
+class EnvironmentError(ParlerError): ...
+class ConfigError(ParlerError): ...
+class APIError(ParlerError): ...
+class ProcessingError(ParlerError): ...
+class OutputError(ParlerError): ...
+class ExportError(OutputError): ...
 ```
 
-**Config file** (`.parlerrc.json`, auto-discovered from CWD up):
-```json
-{
-  "transcription": {
-    "languages": ["fr", "en"],
-    "model": "voxtral-v0.1"
-  },
-  "extraction": {
-    "confidence_threshold": "high"
-  },
-  "output": {
-    "format": "html"
-  },
-  "participants": ["Pierre (Tech Lead)", "Sophie (Product)", "Marc (Eng)"]
-}
-```
+Do not define a custom `FileNotFoundError` class. That decision in the earlier draft was
+needlessly confusing.
+
+Exit-code mapping:
+
+- `2`: input/configuration of user-supplied artefact
+- `3`: environment or missing dependency
+- `4`: API/auth/rate-limit/network
+- `5`: processing failure after valid input
+- `6`: output/export write failure
 
 ---
 
-## 9. Error Taxonomy
+## 9. Configuration Schema
 
-### 9.1 Error hierarchy
+High-level config groups:
 
-```python
-class ParlerError(Exception):
-    """Base class for all parler errors."""
-    exit_code: int = 1
+- `transcription`
+- `chunking`
+- `attribution`
+- `extraction`
+- `cache`
+- `output`
+- `cost`
 
-# ─── Input errors ─────────────────────────────────────────────────────────────
-class InputError(ParlerError):
-    exit_code = 2
+Notable corrections to earlier drafts:
 
-class FileNotFoundError(InputError): pass
-class UnsupportedFormatError(InputError): pass
-class FileTooLargeError(InputError): pass
-class InvalidURLError(InputError): pass
-class NetworkDownloadError(InputError): pass
+- primary config filename is `parler.toml`, not `.parlerrc.json`
+- env vars may use `MISTRAL_API_KEY` or `PARLER_API_KEY`
+- `cost.max_usd` is the canonical total-cost cap field
 
-# ─── Environment errors ────────────────────────────────────────────────────────
-class EnvironmentError(ParlerError):
-    exit_code = 3
+Cross-field constraints:
 
-class MissingAPIKeyError(EnvironmentError): pass
-class FFmpegNotFoundError(EnvironmentError): pass
-class CachePermissionError(EnvironmentError): pass
-class InsufficientDiskSpaceError(EnvironmentError): pass
-
-# ─── API errors ────────────────────────────────────────────────────────────────
-class APIError(ParlerError):
-    exit_code = 4
-
-class AuthenticationError(APIError): pass
-class RateLimitError(APIError):
-    retry_after_s: float | None
-class VoxtralAPIError(APIError): pass
-class MistralAPIError(APIError): pass
-class APITimeoutError(APIError): pass
-
-# ─── Processing errors ──────────────────────────────────────────────────────────
-class ProcessingError(ParlerError):
-    exit_code = 5
-
-class TranscriptionQualityError(ProcessingError):
-    avg_confidence: float
-class ChunkAssemblyError(ProcessingError): pass
-class ExtractionParseError(ProcessingError):
-    raw_response: str
-class ExtractionEmptyError(ProcessingError): pass
-
-# ─── Output errors ─────────────────────────────────────────────────────────────
-class OutputError(ParlerError):
-    exit_code = 6
-
-class OutputWriteError(OutputError): pass
-class ExportError(OutputError):
-    target: str
-```
-
-### 9.2 Error handling matrix
-
-| Error | User message | Action | Recoverable? |
-|-------|-------------|--------|-------------|
-| `MissingAPIKeyError` | "MISTRAL_API_KEY not set. Export it: `export MISTRAL_API_KEY=...`" | Exit 3 | Yes (set key, rerun) |
-| `FFmpegNotFoundError` | "FFmpeg required for .{ext} files. Install: brew install ffmpeg" | Exit 3 | Yes (install FFmpeg) |
-| `FileNotFoundError` | "File not found: {path}" | Exit 2 | Yes (check path) |
-| `UnsupportedFormatError` | "Unsupported format: {ext}. Supported: mp3, mp4, m4a, wav, ogg, webm. Add FFmpeg for others." | Exit 2 | Yes (install FFmpeg) |
-| `FileTooLargeError` (chunk) | "Audio chunk exceeds API limit. Reduce max_chunk_s in config (current: {n}s)" | Exit 2 | Yes (reduce chunk size) |
-| `AuthenticationError` | "API authentication failed. Check your MISTRAL_API_KEY." | Exit 4 | Yes (check key) |
-| `RateLimitError` (max retries) | "Rate limit exceeded after {n} retries. Try again later or reduce concurrency." | Exit 4 | Yes (wait) |
-| `APITimeoutError` | "Voxtral API timed out after {n}s. Network issue or very long audio. Use `--resume` to retry." | Exit 4 + checkpoint | Yes (resume) |
-| `TranscriptionQualityError` | "⚠ Low transcript confidence ({pct}%). Results may be inaccurate. Continue? [y/N]" | Prompt | Yes (continue or abort) |
-| `ExtractionParseError` | "⚠ Could not parse extraction response. Partial results available." | Warning + partial log | Partial |
-| `ExtractionEmptyError` | "No decisions found in transcript. This may be normal for non-decision meetings." | Warning | N/A |
-| `OutputWriteError` | "Cannot write to {path}: {reason}" | Exit 6 | Yes (check path) |
-| `ExportError` | "Export to {target} failed: {reason}. Decision log was saved locally." | Warning | Yes (retry export) |
+- `overlap_s < max_chunk_s`
+- cost caps must be non-negative
+- output format must be one of `markdown`, `html`, `json`
+- extraction multi-pass threshold must be positive
 
 ---
 
-## 10. Performance Budget
+## 10. State Machine
 
-### 10.1 Latency targets
+```text
+IDLE
+  -> INGEST
+  -> TRANSCRIBE
+  -> QUALITY_CHECK
+  -> ATTRIBUTE
+  -> EXTRACT
+  -> RENDER
+  -> EXPORT
+  -> DONE
+```
 
-| Phase | Input size | Target (P50) | Target (P95) | Hard limit |
-|-------|-----------|-------------|-------------|-----------|
-| Audio ingestion | Any | < 2s | < 5s | 30s |
-| Format conversion (FFmpeg) | 2-hour file | < 30s | < 60s | 120s |
-| Voxtral transcription | 30-min audio | < 60s | < 120s | 300s |
-| Voxtral transcription | 2-hour audio | < 4 min | < 8 min | 20 min |
-| Speaker attribution | 10,000 words | < 15s | < 30s | 60s |
-| Decision extraction (single-pass) | 10,000 words | < 20s | < 40s | 90s |
-| Decision extraction (multi-pass) | 50,000 words | < 60s | < 120s | 300s |
-| Report rendering | Any | < 1s | < 2s | 10s |
+Failure behavior:
 
-### 10.2 Cost targets
-
-| Operation | 30-min meeting | 2-hour meeting | Public earnings call (90 min) |
-|-----------|---------------|---------------|-------------------------------|
-| Voxtral transcription | ~$0.10 | ~$0.40 | ~$0.30 |
-| Speaker attribution (2 calls) | ~$0.02 | ~$0.04 | ~$0.03 |
-| Decision extraction (1 call) | ~$0.06 | ~$0.10 (multi-pass) | ~$0.08 |
-| **Total** | **~$0.18** | **~$0.54** | **~$0.41** |
-
-Cost model assumptions: Voxtral at $0.003/min, mistral-large-latest at $2/M input + $6/M output tokens.
-
-### 10.3 Cache effectiveness targets
-
-| Scenario | Cache hit rate | Cost without cache | Cost with cache |
-|----------|---------------|-------------------|----------------|
-| Same file, different output format | 100% (both caches hit) | $0.18 | $0.00 |
-| Same file, different extraction params | 100% transcript, 0% extraction | $0.18 | $0.08 |
-| Different file, same structure | 0% (content hash miss) | $0.18 | $0.18 |
+- `INGEST`, `TRANSCRIBE`, and `EXTRACT` are fatal
+- `ATTRIBUTE` is soft-failable and may degrade to `Unknown`
+- `EXPORT` is soft-failable and must not invalidate a successful local render
 
 ---
 
-## 11. Security and Privacy Model
+## 11. Observability
 
-### 11.1 Data classification
+Required observable events:
 
-| Data type | Classification | Where it lives | Retention |
-|-----------|---------------|---------------|-----------|
-| Original audio file | User data (potentially PII) | Local disk only | Not retained by parler |
-| Voxtral transcription cache | Potentially PII (transcript of speech) | `~/.cache/parler/transcripts/` | User-controlled |
-| Decision extraction cache | Derivative PII | `~/.cache/parler/extractions/` | User-controlled |
-| API key | Secret | Environment variable | Not written to disk by parler |
-| Decision log output | Potentially PII | User-specified output path | User-controlled |
-| Pipeline checkpoint | Potentially PII (hashes + metadata) | `./.parler-state.json` | Auto-deleted on success |
+- stage start
+- stage completion with duration
+- cache hit/miss
+- retry event
+- quality warning
+- parse warning
+- export failure
 
-### 11.2 Data transmission
+Required logging guarantees:
 
-Audio data is transmitted to Voxtral. Transcript text is transmitted to Mistral's chat API. Both transmissions:
-- Use HTTPS (TLS 1.2+ enforced via `httpx` default settings)
-- Are subject to Mistral's data processing terms (EU servers, no training data use per enterprise terms)
-- Can be avoided for re-runs if the cache is warm
-
-**What is NOT transmitted**:
-- The original audio file URL/path
-- Any local environment variables (only the API key is used in headers)
-- Any file system metadata other than audio content
-
-### 11.3 Threat model
-
-| Threat | Mitigation |
-|--------|-----------|
-| API key exposed in logs | Never log the API key. Redact `Authorization` header in debug logs. |
-| Transcript written to temp file before cache | Use `tempfile.NamedTemporaryFile(delete=True)` so temp is cleaned on crash |
-| Cache readable by other processes | Default cache directory is `~/.cache/parler/` (user home, 700 permissions recommended) |
-| Pipeline state contains PII | `.parler-state.json` contains only hashes, not plaintext content. Auto-deleted on successful run. |
-| Export API key exposure | Export API keys logged only at DEBUG level; never in normal output |
-| FFmpeg subprocess injection | Audio file paths are passed as arguments (not shell-interpolated). FFmpeg is invoked via `subprocess.run(..., shell=False)`. |
-
-### 11.4 GDPR compliance notes
-
-`parler` processes meeting audio that may contain personal data (names, voices, discussions involving individuals). The data controller is the user. `parler` is a data processor. Relevant obligations:
-
-- **Data minimization**: audio is chunked and sent to Voxtral; the full file is never uploaded as a single payload
-- **Purpose limitation**: transcription and decision extraction are the sole processing purposes
-- **Storage limitation**: caches have configurable TTL; default is no TTL (user's responsibility to clear)
-- **Security**: HTTPS for all transmissions; local cache at OS-level file permissions
+- redact secrets
+- avoid logging raw transcript by default
+- allow opt-in verbose diagnostics
 
 ---
 
-## 12. Dependency Graph
+## 12. Security and Privacy Notes
 
-### 12.1 Required dependencies (minimal install)
+Earlier drafts understated the sensitivity of local state. The corrected position is:
 
-```
-parler-voice
-├── mistralai >= 1.0.0          # Voxtral + Mistral API client
-├── httpx >= 0.27.0             # HTTP client (used by mistralai)
-├── pydantic >= 2.0.0           # Data validation (DecisionLog schema)
-├── jinja2 >= 3.1.0             # HTML report templating
-├── python-dateparser >= 1.2.0  # Multi-language date parsing
-├── click >= 8.1.0              # CLI framework
-└── rich >= 13.0.0              # Terminal progress and formatting
-```
+- caches and checkpoints may contain PII or confidential business content
+- the user remains responsible for local storage hygiene
+- the software must not pretend these artefacts are harmless metadata
 
-### 12.2 Optional dependencies
+Recommended defaults:
 
-```
-parler-voice[pdf]
-└── weasyprint >= 60.0          # PDF generation from HTML
-
-parler-voice[diarize]
-├── pyannote.audio >= 3.1.0     # Voice diarization
-└── torch >= 2.0.0              # PyTorch (required by pyannote)
-
-parler-voice[export]
-├── notion-client >= 2.0.0      # Notion export
-└── linear-client >= 0.1.0      # Linear export (if available as pip package)
-```
-
-### 12.3 Optional system dependencies
-
-```
-ffmpeg                          # Format conversion for non-native audio formats
-                                # Optional: detected at runtime; clear error if missing
-```
-
-### 12.4 Python version requirement
-
-Python >= 3.11 (uses `match/case`, `tomllib`, `datetime.fromisoformat` improvements).
+- no telemetry
+- no background sync
+- no hidden upload beyond explicit transcription/extraction requests
 
 ---
 
-## 13. Testing Strategy
+## 13. Design Risks to Manage
 
-Full test specifications are in the [`tests/`](./tests/) directory.
+### 13.1 Vendor capability drift
 
-Summary:
+Transcription API behavior is vendor-defined and changing. Guardrails:
 
-| Layer | Count | Tooling | Coverage target |
-|-------|-------|---------|----------------|
-| Unit tests | ~85 | pytest | 90% line, 85% branch |
-| Integration tests | ~25 | pytest + mock API | All API call paths |
-| E2E tests | ~12 | pytest + real API | Core happy paths |
-| BDD scenarios | ~60 | pytest-bdd + Gherkin | All user-facing behaviors |
-| Property tests | ~10 | hypothesis | Core data transformations |
+- adapter layer isolates Mistral SDK specifics
+- model names and request strategy are configuration, not string literals everywhere
+
+### 13.2 Extraction over-assertion
+
+The biggest product risk is false certainty. Guardrails:
+
+- low-confidence items dropped
+- quote support required
+- parser normalization conservative by default
+
+### 13.3 Test drift
+
+The current repository already shows drift between RFCs, feature files, and unit tests.
+Guardrail:
+
+- every implementation phase must update traceability and keep contracts synchronized
 
 ---
 
-## 14. Observability
+## 14. Design Definition of Done
 
-### 14.1 Logging
+The design is only complete when:
 
-`parler` uses Python's standard `logging` module. Log format:
-
-```
-%(asctime)s  %(levelname)-8s  %(name)s  %(message)s
-```
-
-Log levels:
-- `INFO`: stage transitions, cache hits/misses, API call start/end, output written
-- `WARNING`: low confidence, partial extraction, export failures
-- `ERROR`: unrecoverable failures (printed to stderr before raising)
-- `DEBUG`: full API request/response bodies (with API key redacted), FFmpeg command lines, full prompts
-
-`--verbose` enables DEBUG. `--quiet` suppresses INFO and WARNING (only ERROR printed).
-
-### 14.2 Progress reporting
-
-For interactive use (stdout is a TTY), progress is shown via Rich:
-
-```
-Processing meeting.mp3 (47:23)
-
-  ✓  Audio ingested         0.3s
-  ⠿  Transcribing...        Chunk 3/5  (12:00 - 22:00)  ████████░░  [60%]  ~45s remaining
-```
-
-For non-interactive use (stdout redirected), progress is suppressed. Machine-readable status is available via `--format json` on the `report` command.
-
-### 14.3 Metrics (future)
-
-Phase 2 may add optional telemetry (opt-in) reporting:
-- Transcription duration per audio minute
-- Decision extraction token counts
-- Cache hit rates
-
-All telemetry is opt-in, anonymous, and documented.
+1. every type in this document has one canonical home in code
+2. every cache key input is explicit and testable
+3. every stage has fatal vs non-fatal behavior defined
+4. the BDD and TDD suite reflects this design instead of older assumptions

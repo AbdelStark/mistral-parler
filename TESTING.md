@@ -1,262 +1,330 @@
-# Testing Philosophy and Standards
+# Testing Philosophy and Delivery Standard
 
-> Quality is not a feature — it is a constraint. Every test in this suite exists to
-> make a refactoring safe, catch a regression before it reaches a user, or document
-> a non-obvious contract. If a test does none of these things, delete it.
+**Version**: 0.2.0
+**Status**: Implementation baseline
+
+This document defines how `parler` is verified.
+
+The previous draft had strong instincts but weak contract alignment. This revision makes
+testing a traceable delivery system instead of a loose collection of good ideas.
 
 ---
 
-## Test taxonomy
+## 1. Testing Goals
 
-```
+The test suite must do four jobs:
+
+1. prove the canonical behavior in [`SPEC.md`](./SPEC.md) and [`SDD.md`](./SDD.md)
+2. catch regressions before they reach users
+3. make refactors safe
+4. expose ambiguity in the design early
+
+Any test that does none of those jobs is noise.
+
+---
+
+## 2. Test Taxonomy
+
+```text
 tests/
-├── unit/          Pure function tests. No I/O, no mocks of domain logic.
-├── integration/   Mocked external APIs. Test adapters and wiring.
-├── property/      Hypothesis-driven. Prove invariants over all inputs.
-├── e2e/           Real API calls. Marked @slow. Run manually or in nightly CI.
-├── benchmarks/    pytest-benchmark. Performance baselines, not correctness.
-├── conftest.py    Shared fixtures — transcript factories, mock clients, config.
-└── fixtures/      Static test data: audio, API responses, expected logs.
+  unit/         Pure logic and local transformation rules
+  integration/  Adapter boundaries with mocked external systems
+  property/     Invariants over broad input spaces
+  e2e/          Real API runs against Mistral and real filesystem behavior
+  benchmarks/   Non-correctness performance budgets
+
+features/
+  *.feature     BDD acceptance scenarios for user-visible behavior
 ```
 
-```
-features/          Gherkin BDD scenarios. Acceptance criteria in plain English.
-```
+BDD is not a substitute for TDD.
+
+BDD answers: “what behavior does the user experience?”
+TDD answers: “what local and integration contracts make that behavior safe to ship?”
 
 ---
 
-## The four test layers
+## 3. Canonical Verification Layers
 
-### Layer 1: Unit tests
+### 3.1 Layer 1: Unit tests
 
-Scope: one function, one module. No mocks of domain logic — only stub I/O at the
-system boundary (file system, network, time).
+Scope:
+
+- parsers
+- deadline resolver
+- chunk assembly
+- transcript quality evaluator
+- renderer formatting logic
+- config validation
+- immutable model behavior
 
 Rules:
-- All unit tests run in < 1 second total (use `--benchmark-max-time` to enforce)
-- No `@pytest.mark.slow` inside `tests/unit/`
-- No `requests`, `httpx`, `MistralClient` real calls — mock everything
-- Use `pytest.approx()` for all float comparisons
-- Use `freezegun` for any test that depends on `date.today()` or `datetime.now()`
 
-Anti-patterns to avoid:
-```python
-# BAD: testing implementation detail, not behaviour
-def test_calls_internal_method():
-    with patch("parler.extraction.parser._normalize_confidence") as mock:
-        parse_extraction_response(...)
-    mock.assert_called_once()  # ← testing how it works, not what it does
+- no network
+- no real Mistral client
+- no shelling out to FFmpeg unless specifically testing wrapper behavior
+- use real domain models, not mocks of domain models
 
-# GOOD: testing the observable contract
-def test_invalid_confidence_normalized_to_medium():
-    result = parse_extraction_response({"decisions": [{..., "confidence": "very_high"}]})
-    assert result.decisions[0].confidence == "medium"
-```
+### 3.2 Layer 2: Integration tests
 
-### Layer 2: Integration tests
+Scope:
 
-Scope: one adapter + external boundary (mocked). Tests the request/response contract
-with external systems without actually calling them.
+- Mistral transcription adapter
+- Mistral extraction adapter
+- retry policy
+- cache round-trip behavior
+- exporter payload shaping
 
 Rules:
-- All HTTP calls mocked via `unittest.mock.patch` or `respx`
-- Test both happy path AND the three failure modes: auth error, network error, bad response
-- Integration tests may read/write temp files (use `tmp_path` fixture)
-- Never import from `tests/unit/` — share only through `conftest.py`
 
-### Layer 3: Property tests
+- all external boundaries mocked
+- both happy path and failure path required
+- request construction is part of the contract
 
-Scope: invariants that must hold for ALL inputs, not just the hand-crafted fixtures.
+### 3.3 Layer 3: Property tests
 
-Rules:
-- All property tests use Hypothesis (`@given`, `@settings`)
-- Name properties explicitly in the module docstring: "P1 — never raises", etc.
-- `max_examples = 200` minimum (configured in `pyproject.toml`)
-- Run property tests in CI (`pytest tests/property/ -v`)
-- When Hypothesis finds a failure, add the failing example to the parametrized
-  regression table in the corresponding unit test file
+Scope:
 
-### Layer 4: E2E tests
-
-Scope: the full pipeline against real Mistral APIs. Require `MISTRAL_API_KEY`.
+- extraction parser normalization
+- deadline resolution invariants
+- ID uniqueness and normalization
+- immutability and no-raise guarantees
 
 Rules:
-- Always marked `@pytest.mark.slow`
-- Must include explicit `@pytest.mark.skipif` guard for missing `MISTRAL_API_KEY`
-- Never write E2E tests that test only one narrow behaviour — test the full pipeline
-- Include a regression check against a pre-recorded `expected.json` fixture
-- Budget assertions: test that the pipeline completes within a time budget
+
+- every property module names its properties explicitly
+- every Hypothesis-found regression graduates into a concrete regression test
+
+### 3.4 Layer 4: BDD acceptance tests
+
+Scope:
+
+- CLI behavior
+- cache-visible user outcomes
+- multilingual scenarios
+- speaker attribution outcomes
+- rendering outputs
+- error recovery paths
+
+Rules:
+
+- scenarios describe behavior, not implementation details
+- step wording must map to a single externally observable contract
+- contradictory scenarios must be treated as spec bugs, not testing “coverage”
+
+### 3.5 Layer 5: E2E tests
+
+Scope:
+
+- full pipeline against real APIs
+- latency and cost sanity
+- real fixture-based regression checking
+
+Rules:
+
+- explicitly marked slow
+- skipped when credentials are unavailable
+- budgeted and rate-limited
+
+### 3.6 Layer 6: Benchmarks and mutation tests
+
+Purpose:
+
+- benchmark runtime budgets
+- mutation testing for parser, resolver, and cache logic
+
+These are release-confidence tools, not day-to-day correctness tools.
 
 ---
 
-## Fixture factories
+## 4. Quality Gates
 
-The `conftest.py` provides factory functions, not raw objects. Use them:
+### 4.1 Mandatory CI gates
 
-```python
-# BAD: inline construction
-seg = TranscriptSegment(id=0, start_s=0.0, end_s=5.0, text="Test",
-                        language="fr", speaker_id=None, ...)  # 10 more fields
+- unit
+- integration
+- property
+- BDD
+- coverage
+- lint
+- typecheck
 
-# GOOD: use the fixture
-def test_something(sample_transcript_fr):
-    ...
-```
+### 4.2 Scheduled or opt-in gates
 
-For property tests where you need custom shapes, use `hypothesis.strategies` directly
-or the strategy helpers in `tests/property/`:
-
-```python
-from hypothesis import given
-from hypothesis import strategies as st
-from tests.property.strategies import decision_strategy
-
-@given(decision=decision_strategy())
-def test_decision_property(decision):
-    ...
-```
+- E2E
+- benchmarks
+- mutation testing
 
 ---
 
-## Writing parametrized tests
+## 5. Coverage Policy
 
-Prefer `@pytest.mark.parametrize` over copy-pasted test functions:
+Global floor:
 
-```python
-# BAD: copy-paste
-def test_next_friday(): ...
-def test_next_monday(): ...
-def test_next_tuesday(): ...
+- line coverage: `>= 90%`
+- branch coverage: `>= 85%`
 
-# GOOD: parametrized table
-@pytest.mark.parametrize("raw,expected", [
-    ("next Friday", date(2026, 4, 17)),
-    ("next Monday", date(2026, 4, 13)),
-    ("next Tuesday", date(2026, 4, 14)),
-])
-def test_next_weekday(raw, expected):
-    assert resolve_deadline(raw, ANCHOR, "en") == expected
-```
-
-Always provide meaningful `ids`:
-
-```python
-@pytest.mark.parametrize("raw,lang,expected", CASES, ids=[
-    f"{lang}:{raw!r}" for raw, lang, _ in CASES
-])
-```
-
----
-
-## Mocking guidelines
-
-### What to mock
-- External API clients (`MistralClient`, `requests.post`, `httpx.AsyncClient`)
-- File system when testing non-IO logic (`Path.stat`, `Path.read_bytes`)
-- Time (`freezegun.freeze_time`) when testing date-relative logic
-
-### What NOT to mock
-- Internal domain logic (parse, resolve, validate)
-- Data models (use real `TranscriptSegment`, `Decision`, etc.)
-- Standard library (unless testing error handling paths)
-
-### Mock isolation checklist
-Before writing a mock:
-1. Is this mock testing the right thing, or obscuring the bug?
-2. Would a real call be fast and deterministic? (if yes, don't mock)
-3. Does this mock make the test pass for wrong reasons? (mock too permissive)
-
----
-
-## Coverage targets
-
-Run with: `pytest --cov=parler --cov-report=term-missing --cov-fail-under=90`
+Per-module targets remain stricter for core logic:
 
 | Module | Line | Branch |
 |--------|------|--------|
-| `parler.audio.ingester` | ≥ 95% | ≥ 90% |
-| `parler.transcription.*` | ≥ 90% | ≥ 85% |
-| `parler.extraction.extractor` | ≥ 95% | ≥ 90% |
-| `parler.extraction.deadline_resolver` | ≥ 98% | ≥ 95% |
-| `parler.extraction.parser` | ≥ 98% | ≥ 95% |
-| `parler.rendering.renderer` | ≥ 90% | ≥ 85% |
-| `parler.pipeline.orchestrator` | ≥ 85% | ≥ 80% |
-| `parler.cli` | ≥ 85% | ≥ 75% |
-| **Total** | **≥ 90%** | **≥ 85%** |
+| `parler.audio.ingester` | >= 95% | >= 90% |
+| `parler.transcription.*` | >= 90% | >= 85% |
+| `parler.extraction.extractor` | >= 95% | >= 90% |
+| `parler.extraction.deadline_resolver` | >= 98% | >= 95% |
+| `parler.extraction.parser` | >= 98% | >= 95% |
+| `parler.rendering.renderer` | >= 90% | >= 85% |
+| `parler.pipeline.orchestrator` | >= 85% | >= 80% |
+| `parler.cli` | >= 85% | >= 75% |
 
-### What 90% line coverage actually means
-
-Line coverage measures whether a line was *executed*, not whether it was *tested correctly*.
-A test that calls `parse_extraction_response({})` once can hit 90% coverage while
-leaving the entire normalization and validation path untested.
-
-The real coverage metric here is **decision coverage** — every conditional branch
-is exercised with both a truthy and falsy case. Use branch coverage (`--branch`) to
-enforce this.
+Coverage is necessary but insufficient. Branch coverage and mutation score matter more
+than a decorative line number.
 
 ---
 
-## Mutation testing
+## 6. Scenario and Test Writing Standard
 
-Run monthly or before a major refactor:
+### 6.1 Good acceptance scenarios
+
+Good BDD scenarios:
+
+- describe one meaningful user-facing outcome
+- avoid hidden implementation assumptions
+- state the observable result precisely
+
+Bad BDD scenarios:
+
+- assert internal method names
+- mix multiple unrelated behaviors
+- freeze draft assumptions that the canonical spec has already rejected
+
+### 6.2 Good unit tests
+
+Good unit tests:
+
+- assert the observable contract of a small unit
+- check both sides of a boundary
+- encode known regressions
+
+Bad unit tests:
+
+- mock internal helpers just to prove a function called them
+- verify incidental ordering with no user value
+- allow broad mocks that make false positives easy
+
+---
+
+## 7. Traceability Matrix
+
+Every major feature must have a three-way mapping:
+
+| Capability | RFCs | BDD | TDD |
+|-----------|------|-----|-----|
+| Input validation and normalization | RFC-0001, RFC-0002 | `features/transcription.feature`, `features/error_handling.feature` | `tests/unit/test_audio_ingestion.py` |
+| Chunking and assembly | RFC-0002 | `features/transcription.feature` | `tests/unit/test_chunk_assembly.py`, `tests/integration/test_voxtral_integration.py` |
+| Transcript quality gating | RFC-0002 | `features/transcription.feature`, `features/error_handling.feature` | `tests/unit/test_transcript_quality.py` |
+| Caching | RFC-0001, RFC-0002, RFC-0003 | `features/caching.feature` | `tests/integration/test_cache_behavior.py` |
+| Speaker resolution | RFC-0004 | `features/speaker_attribution.feature` | `tests/unit/test_speaker_attribution.py` |
+| Decision extraction and parsing | RFC-0003 | `features/decision_extraction.feature`, `features/multilingual.feature` | `tests/unit/test_decision_extraction_parsing.py`, `tests/integration/test_mistral_extraction.py` |
+| Deadline resolution | RFC-0003 | `features/decision_extraction.feature` | `tests/unit/test_deadline_resolution.py`, `tests/unit/test_deadline_resolution_parametrized.py`, `tests/property/test_deadline_resolver_properties.py` |
+| Rendering | RFC-0005 | `features/output_formats.feature` | `tests/unit/test_report_rendering.py` |
+| Orchestration and resume | RFC-0001 | `features/cli_interface.feature`, `features/error_handling.feature` | `tests/unit/test_pipeline_orchestration.py` |
+| Config loading | RFC-0001 | `features/cli_interface.feature` | `tests/unit/test_config_loading.py` |
+| Export adapters | RFC-0005 | future export scenarios or CLI scenarios | `tests/integration/test_export_integrations.py` |
+
+If a change lands without a clear traceability path, it is incomplete.
+
+---
+
+## 8. Draft Gaps Found During Review
+
+The repository currently contains real contradictions that must be corrected before or
+during implementation.
+
+### 8.1 Data-model drift
+
+- `Transcript.language` vs `primary_language`
+- `Rejection.summary` vs `proposal`
+- `OpenQuestion.asked_by` appearing in tests but not in RFC-0003
+- checkpoint contents described as both full artefacts and hash-only metadata
+
+### 8.2 Cache-key drift
+
+- some drafts key transcription cache by audio hash plus model only
+- BDD already expects language-hint-sensitive invalidation
+- canonical design now requires request-policy fingerprints
+
+### 8.3 Vendor-assumption drift
+
+- old drafts assumed no diarization support in Voxtral
+- current official docs expose diarization as a supported transcription parameter
+- old drafts assumed no strong vendor constraint around timestamps plus language
+
+### 8.4 Security drift
+
+- current tests expect checkpoint transcript serialization
+- older design text incorrectly describes checkpoint as hash-only
+
+These are spec defects. Treat them as first-class work.
+
+---
+
+## 9. Test Data Policy
+
+- audio fixtures must be synthetic or otherwise safe to commit
+- no real customer recordings
+- no real API keys, company secrets, or personal email addresses
+- transcript fixtures may be vendor responses captured from synthetic audio
+- multilingual fixtures should include realistic code-switching and deadline phrases
+
+---
+
+## 10. Mocking Rules
+
+Mock:
+
+- vendor SDK clients
+- HTTP transport
+- clock and sleep
+- filesystem only when the test is not about filesystem behavior
+
+Do not mock:
+
+- parser logic
+- deadline resolver logic
+- cache serialization logic when round-trip behavior is the thing under test
+- renderer output strings when validating format behavior
+
+---
+
+## 11. CI Workflow Standard
+
+Fast path on every change:
 
 ```bash
-hatch run mutate
-# or
+pytest tests/unit tests/integration tests/property features -v --cov=parler
+ruff check .
+mypy parler/
+```
+
+Scheduled path:
+
+```bash
+pytest tests/e2e -v -s
+pytest tests/benchmarks --benchmark-only
 mutmut run --paths-to-mutate parler/
-mutmut results
-```
-
-Target: ≥ 80% mutation score for core modules (`extraction/`, `transcription/`).
-A killed mutation = your tests caught the change. A surviving mutation = gap in coverage.
-
-Common surviving mutation patterns to watch for:
-- Off-by-one in confidence thresholds (`>= 0.50` vs `> 0.50`)
-- Wrong default value (empty list vs empty tuple)
-- Missing `is_explicit=False` in deadline construction
-- `and` vs `or` in quality verdict logic
-
----
-
-## CI workflow
-
-```yaml
-# .github/workflows/test.yml (excerpt)
-jobs:
-  unit:
-    - pytest tests/unit/ tests/integration/ features/ tests/property/
-        --cov=parler --cov-fail-under=90 -x --tb=short
-
-  slow:
-    if: github.event_name == 'schedule' || contains(github.event.inputs.run_e2e, 'true')
-    - pytest tests/e2e/ -v -s
-    env:
-      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-
-  benchmarks:
-    if: github.event_name == 'schedule'
-    - pytest tests/benchmarks/ --benchmark-compare=baseline --benchmark-fail-max-time=0.5
 ```
 
 ---
 
-## Adding a new test
+## 12. Delivery Standard
 
-Checklist:
-- [ ] Is this testing behaviour (observable output) or implementation (internal call)?
-- [ ] Does the test name describe what it tests, not how? (`test_missing_summary_dropped` not `test_parsing_path_3`)
-- [ ] Is there a failing case as well as a passing case?
-- [ ] If testing a boundary: test both sides of the boundary
-- [ ] If the function might raise: test that it doesn't raise for invalid inputs
-- [ ] If the function returns a mutable type: test that it returns a new object
-- [ ] Is this better expressed as a property test (Hypothesis) rather than 5 hand-crafted cases?
+A feature is not complete when the happy path passes.
 
----
+A feature is complete when:
 
-## Test data policy
-
-- Audio fixtures are **synthetic** (gTTS-generated) — never real meeting recordings
-- No real personal data in any fixture (names are fictional: Pierre, Sophie, Marc, Alice)
-- Transcript fixtures are real Voxtral responses committed to git once recorded
-- API response fixtures are real Mistral responses committed to git once recorded
-- Fixture files never contain: real API keys, real personal emails, real company data
+1. the canonical contract is explicit
+2. the BDD scenario exists or is updated
+3. the local unit and integration seams are tested
+4. the failure modes are encoded
+5. the traceability matrix still makes sense

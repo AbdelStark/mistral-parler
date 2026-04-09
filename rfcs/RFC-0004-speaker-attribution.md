@@ -1,8 +1,13 @@
 # RFC-0004: Speaker Attribution and Diarization
 
-**Status**: Draft  
+**Status**: Draft, pending sync with v0.2 baseline
 **Date**: 2026-04-09  
 **Repo**: parler
+
+> Note:
+> This draft reflects an earlier assumption set. The current canonical baseline in
+> [`SPEC.md`](../SPEC.md) and [`SDD.md`](../SDD.md) treats speaker attribution as a
+> hybrid design that can use vendor diarization when available.
 
 ---
 

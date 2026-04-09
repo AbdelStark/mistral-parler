@@ -1,8 +1,13 @@
 # RFC-0005: Report Format and Export Integrations
 
-**Status**: Draft  
+**Status**: Draft, pending sync with v0.2 baseline
 **Date**: 2026-04-09  
 **Repo**: parler
+
+> Note:
+> The canonical output and export baseline now lives in [`SPEC.md`](../SPEC.md),
+> [`SDD.md`](../SDD.md), and [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
+> This RFC remains useful context but is not the final source of truth on its own.
 
 ---
 

@@ -1,8 +1,14 @@
 # RFC-0002: Voxtral Integration and Multilingual Handling
 
-**Status**: Draft  
+**Status**: Draft, pending sync with v0.2 baseline
 **Date**: 2026-04-09  
 **Repo**: parler
+
+> Note:
+> This RFC predates the current canonical baseline and should be read alongside
+> [`SPEC.md`](../SPEC.md) and [`SDD.md`](../SDD.md). In particular, current official
+> Mistral transcription capabilities and constraints were re-validated separately on
+> 2026-04-09 and may differ from assumptions in this draft.
 
 ---
 

@@ -1,8 +1,13 @@
 # RFC-0001: Architecture and Processing Pipeline
 
-**Status**: Draft  
+**Status**: Draft, pending sync with v0.2 baseline
 **Date**: 2026-04-09  
 **Repo**: parler
+
+> Note:
+> The canonical implementation baseline now lives in [`SPEC.md`](../SPEC.md),
+> [`SDD.md`](../SDD.md), and [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
+> If this RFC conflicts with those documents, the root documents win until this RFC is updated.
 
 ---
 

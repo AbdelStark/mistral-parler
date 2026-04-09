@@ -1,6 +1,16 @@
 # Test Specifications
 
-TDD test specifications for `parler`. These define the expected behavior at unit, integration, and E2E levels. Implemented with `pytest`.
+TDD test specifications for `parler`. These define expected behavior at unit,
+integration, property, and E2E levels and are implemented with `pytest`.
+
+The canonical contract for these tests is now:
+
+- [`SPEC.md`](../SPEC.md)
+- [`SDD.md`](../SDD.md)
+- [`TESTING.md`](../TESTING.md)
+
+Where an individual draft test reflects an older assumption, the canonical documents
+win and the test should be updated as part of the same change.
 
 ## Structure
 

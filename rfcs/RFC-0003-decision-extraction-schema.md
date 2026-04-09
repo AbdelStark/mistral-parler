@@ -1,8 +1,13 @@
 # RFC-0003: Decision Extraction Schema
 
-**Status**: Draft  
+**Status**: Draft, pending sync with v0.2 baseline
 **Date**: 2026-04-09  
 **Repo**: parler
+
+> Note:
+> The canonical data model and extraction contract now live in [`SPEC.md`](../SPEC.md)
+> and [`SDD.md`](../SDD.md). If this draft disagrees with the root documents on item
+> schema, cache policy, or deadline semantics, the root documents win.
 
 ---
 

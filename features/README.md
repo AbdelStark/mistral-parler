@@ -1,6 +1,12 @@
 # BDD Feature Specifications
 
-Behavior-Driven Development feature files for `parler`. Written in Gherkin. Implemented with `pytest-bdd`.
+Behavior-Driven Development feature files for `parler`. Written in Gherkin and
+implemented with `pytest-bdd`.
+
+These feature files express user-visible behavior. Their canonical reference is now
+[`SPEC.md`](../SPEC.md) plus [`SDD.md`](../SDD.md). If a scenario reflects an older
+draft assumption, the spec should be corrected first and the scenario updated
+immediately after.
 
 ## Feature index
 

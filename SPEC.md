@@ -1,225 +1,404 @@
-# parler — Technical Specification
+# parler — Canonical Product and Technical Specification
 
-**Version**: 0.1.0-draft  
-**Status**: Draft  
+**Version**: 0.2.0
+**Status**: Implementation-ready baseline
 **Date**: 2026-04-09
 
----
+This document is the canonical contract for `parler`.
 
-## 1. Overview
-
-`parler` is a Python CLI and library that takes audio or video input (meeting recordings, earnings calls, podcasts, interviews) and produces a structured Decision Log: a machine-readable and human-readable record of what was decided, committed to, rejected, and left open.
-
-It is designed for European teams working in multilingual contexts (primarily French/English, but also German, Spanish, Italian, and mixed-language environments) where English-first transcription tools fail or produce mediocre results.
+If any RFC, BDD scenario, TDD artifact, README example, or future implementation detail
+conflicts with this file or with [`SDD.md`](./SDD.md), `SPEC.md` and `SDD.md` win.
 
 ---
 
-## 2. Processing Pipeline
+## 1. Product Definition
 
+`parler` is a local-first Python CLI and library that converts recorded audio or video
+into a structured **Decision Log**.
+
+The product is intentionally not a generic summarizer. Its primary output is a
+machine-checkable record of:
+
+- `decisions`: agreed outcomes or explicit decisions
+- `commitments`: owned follow-up actions, with deadline when available
+- `rejected`: explicit no-go decisions or rejected proposals
+- `open_questions`: unresolved questions that materially remain open
+
+The core value proposition is:
+
+1. Better multilingual transcription for French-first and bilingual teams
+2. Better extraction of accountable outcomes than generic meeting summaries
+3. Local artefacts, resumability, caching, and predictable CLI behavior
+
+---
+
+## 2. Goals and Non-Goals
+
+### 2.1 Goals
+
+- Process recorded meetings, interviews, earnings calls, and similar long-form audio
+- Support multilingual and code-switched business audio, especially French/English
+- Produce human-readable and machine-readable outputs from the same canonical log
+- Be resumable, cache-aware, and scriptable
+- Make quality limitations explicit instead of silently hallucinating certainty
+
+### 2.2 Non-Goals for v1
+
+- Live meeting capture or realtime note-taking
+- Calendar, email, or OAuth-heavy collaboration features
+- Translation as a primary feature
+- Biometric speaker identification
+- Fully autonomous exports that mutate third-party systems without an explicit user action
+- Guaranteed perfect diarization in noisy cross-talk-heavy recordings
+
+---
+
+## 3. Scope Boundaries
+
+### 3.1 First-class inputs
+
+- Local audio files
+- Local video files with embedded audio
+- Public `http` or `https` URLs
+- `stdin` streams for scripted workflows
+
+### 3.2 First-class outputs
+
+- Markdown report
+- HTML report
+- JSON decision log
+- Optional exports to Notion, Linear, Jira, and Slack
+
+### 3.3 Official support envelope
+
+- Recordings up to 3 hours are in the normal support envelope
+- Recordings longer than 3 hours may still work through chunking, but are best-effort
+- Recordings longer than 4 hours are out of scope for v1
+
+This reflects a deliberate mix of product policy and current vendor capabilities. On
+2026-04-09, Mistral’s official audio docs describe offline transcription support up to
+3 hours per request for Voxtral Mini Transcribe V2.
+
+---
+
+## 4. External Dependency Baseline
+
+The current draft set was written against older assumptions. The baseline below was
+re-checked against official Mistral documentation on 2026-04-09.
+
+### 4.1 Transcription backend
+
+- Endpoint: `POST /v1/audio/transcriptions`
+- Default model family: `voxtral-mini-latest`
+- Current relevant API features:
+  - segment or word timestamps
+  - speaker diarization
+  - context biasing
+  - language parameter
+
+### 4.2 Known vendor constraints to design around
+
+- `timestamp_granularities` and explicit `language` are currently documented as not
+  compatible on the offline transcription path
+- diarization is supported by the transcription API and should no longer be treated as
+  a hypothetical future capability
+- JSON mode for extraction is available on `mistral-large-latest` via
+  `response_format={"type": "json_object"}`
+
+These constraints are design inputs, not implementation afterthoughts.
+
+---
+
+## 5. End-to-End System Behavior
+
+The canonical pipeline is:
+
+```text
+Input Resolution
+  -> Audio Ingestion / Normalization
+  -> Transcription
+  -> Transcript Quality Evaluation
+  -> Speaker Resolution
+  -> Decision Extraction
+  -> Rendering
+  -> Optional Export
 ```
-Audio Input
-    │
-    ▼
-┌─────────────────┐
-│  Audio Ingestion │  → Format detection, optional FFmpeg preprocessing
-└────────┬────────┘
-         │
-    ▼
-┌─────────────────────────┐
-│  Voxtral Transcription  │  → Multilingual, timestamped, language-tagged segments
-└────────┬────────────────┘
-         │
-    ▼
-┌─────────────────────────┐
-│  Speaker Attribution    │  → Diarization, speaker labeling
-└────────┬────────────────┘
-         │
-    ▼
-┌─────────────────────────┐
-│  Decision Extraction    │  → Structured extraction via Mistral LLM
-└────────┬────────────────┘
-         │
-    ▼
-┌─────────────────────────┐
-│  Report Rendering       │  → Markdown, HTML, JSON, export integrations
-└─────────────────────────┘
+
+### 5.1 Stage semantics
+
+- `Input Resolution` resolves local file, URL, or `stdin` to a local artefact
+- `Audio Ingestion` validates the file, extracts metadata, computes content hash,
+  normalizes unsupported containers, and produces an `AudioFile`
+- `Transcription` calls Voxtral, handles chunking if necessary, assembles a canonical
+  `Transcript`, and writes transcription cache entries
+- `Transcript Quality Evaluation` computes objective quality signals and decides whether
+  to warn, prompt, or continue
+- `Speaker Resolution` converts vendor diarization labels or opaque speaker clusters
+  into stable speaker names or `Unknown`
+- `Decision Extraction` produces a typed `DecisionLog`
+- `Rendering` converts the `DecisionLog` into Markdown, HTML, or JSON
+- `Optional Export` maps the `DecisionLog` into external systems without mutating the
+  local canonical log
+
+---
+
+## 6. Canonical Data Contracts
+
+This section is intentionally brief. The full type contracts live in [`SDD.md`](./SDD.md).
+
+### 6.1 Audio
+
+Canonical internal artefact: `AudioFile`
+
+Required fields:
+
+- `path`
+- `original_path`
+- `format`
+- `duration_s`
+- `sample_rate`
+- `channels`
+- `size_bytes`
+- `content_hash`
+
+### 6.2 Transcript
+
+Canonical internal artefact: `Transcript`
+
+Required fields:
+
+- `text`
+- `language`
+- `detected_languages`
+- `duration_s`
+- `segments`
+- `model`
+- `content_hash`
+
+Notes:
+
+- `language` is the dominant language code for the full transcript
+- `detected_languages` is the normalized set of languages observed across segments
+- external JSON may expose `primary_language` as a presentation alias, but the
+  canonical internal field remains `language`
+
+### 6.3 Decision log
+
+Canonical internal artefact: `DecisionLog`
+
+Top-level sections:
+
+- `decisions`
+- `commitments`
+- `rejected`
+- `open_questions`
+- `metadata`
+
+Rules:
+
+- all top-level sections are arrays, never `null`
+- item IDs are stable within a rendered artefact and normalized on parse
+- invalid or partial LLM objects are dropped, not allowed to poison the entire result
+
+### 6.4 Item semantics
+
+`Decision`
+- explicit agreed outcome
+
+`Commitment`
+- owned follow-up action
+- `owner` and `action` are required
+- `deadline` is optional but strongly preferred
+- missing owner becomes `Unknown`
+
+`Rejection`
+- explicit rejection or explicit decision not to do something
+- canonical field is `summary`
+- `reason` is optional
+
+`OpenQuestion`
+- unresolved question with practical consequence
+- `asked_by` and `stakes` are optional but recommended
+
+---
+
+## 7. Functional Requirements
+
+### 7.1 Input and ingestion
+
+- `FR-001`: `parler` must reject obviously non-audio input with actionable error text
+- `FR-002`: cache keys must be content-based, never filename-based
+- `FR-003`: unsupported containers must be normalized through FFmpeg when available
+- `FR-004`: missing FFmpeg must surface an environment error, not a generic failure
+
+### 7.2 Transcription
+
+- `FR-005`: transcription must default to deterministic, resumable behavior
+- `FR-006`: the transcription cache key must include every request attribute that can
+  change transcript meaning, including at least:
+  - audio content hash
+  - model identifier
+  - diarization mode
+  - timestamp mode
+  - language-mode strategy fingerprint
+  - preprocessing fingerprint
+- `FR-007`: transcript assembly must preserve monotonic timestamps and must not emit
+  duplicated boundary text
+- `FR-008`: transcript quality must be evaluated before downstream extraction
+
+### 7.3 Speaker resolution
+
+- `FR-009`: `parler` must prefer vendor diarization labels when available
+- `FR-010`: name resolution may use transcript cues and participant hints, but must
+  never hallucinate a name not present in either the transcript, participant list, or
+  trusted upstream diarization metadata
+- `FR-011`: unresolved speakers must remain `Unknown`
+
+### 7.4 Decision extraction
+
+- `FR-012`: extraction must use structured output mode and schema validation
+- `FR-013`: low-confidence extracted items must be excluded from the final log
+- `FR-014`: extraction cache keys must include every input that can change semantic
+  output, including at least:
+  - transcript content hash
+  - extraction model
+  - prompt version
+  - schema version
+  - meeting date or deadline resolution anchor
+  - extraction policy version
+
+### 7.5 Rendering and exports
+
+- `FR-015`: Markdown, HTML, and JSON must all derive from the same canonical
+  `DecisionLog`
+- `FR-016`: HTML output must be self-contained
+- `FR-017`: export failures must not erase or invalidate local outputs
+
+### 7.6 CLI and resumability
+
+- `FR-018`: the CLI must be deterministic, scriptable, and explicit about exit codes
+- `FR-019`: resumability must operate from serialized stage outputs, not by replaying
+  opaque side effects
+- `FR-020`: checkpoint files must be treated as sensitive local artefacts because they
+  can contain transcript and extraction data
+
+---
+
+## 8. Quality and Safety Requirements
+
+### 8.1 Quality gates
+
+- average transcript quality below warning threshold must emit a warning
+- transcript quality below hard-stop threshold must prompt unless `--yes` is set
+- extraction parse failure must degrade gracefully to partial or empty output
+
+### 8.2 Security and privacy
+
+- API keys must never appear in logs, reprs, or checkpoints
+- checkpoints and caches must be written with restrictive local permissions where the
+  OS supports them
+- no stateful cloud service is part of the v1 architecture
+
+### 8.3 Performance
+
+Target budgets:
+
+- interactive 30-minute meeting: under 2 minutes end-to-end on warm internet path
+- warm-cache rerender: under 3 seconds
+- rendering: under 2 seconds
+
+---
+
+## 9. Supported CLI Surface
+
+Canonical commands:
+
+```text
+parler process <input>
+parler transcribe <input>
+parler extract --from-state <state.json>
+parler report --from-state <state.json>
+parler cache list
+parler cache clear
+parler cache show <key>
 ```
 
-Each stage is independently testable and the intermediate representation (the transcript) is serializable to JSON for caching.
+Canonical high-value flags:
+
+- `--lang`
+- `--participants`
+- `--output`
+- `--format`
+- `--no-diarize`
+- `--resume`
+- `--yes`
+- `--cost-estimate`
+- `--config`
+- `--anonymize-speakers`
+
+The CLI contract in the draft artefacts must be normalized to this surface. Legacy
+examples that pass state as a positional argument should be retired in favor of the
+explicit `--from-state` form.
 
 ---
 
-## 3. Audio Ingestion
+## 10. Draft Reconciliation Decisions
 
-### Supported formats
+The review surfaced multiple contradictions. These are the resolved positions.
 
-Native (no FFmpeg required): `mp3`, `mp4`, `m4a`, `wav`, `ogg`, `webm`
+### 10.1 Canonical naming
 
-With FFmpeg (optional): any format FFmpeg can decode, including `mov`, `avi`, `mkv`, `flac`, `aac`, `opus`
+- package/distribution name for this repository: `parler`
+- license for this repository baseline: MIT
+- config primary format: TOML, with YAML and JSON accepted as input formats
 
-### Chunking
+### 10.2 Canonical checkpoint semantics
 
-Voxtral's API accepts audio up to a configured maximum length. For longer recordings, `parler` splits the audio into overlapping chunks:
+- checkpoint files serialize real stage artefacts, including transcript and extraction
+  outputs when available
+- checkpoint files are sensitive local state, not “hash-only metadata”
 
-- Chunk size: 10 minutes (600 seconds)
-- Overlap: 30 seconds (to handle sentences that span chunk boundaries)
-- Split points: silence detection preferred over hard cuts (using FFmpeg `silencedetect` filter)
+### 10.3 Canonical diarization approach
 
-Chunk overlap is resolved in the transcript assembly step: overlapping segments from adjacent chunks are merged by timestamp and deduplicated.
+- v1 is hybrid, not LLM-only
+- primary segmentation source:
+  1. vendor diarization if available
+  2. existing opaque diarization IDs in transcript input
+  3. text-only fallback heuristics
 
-### Metadata extraction
+### 10.4 Canonical commitment semantics
 
-Audio metadata (if available): title, duration, recording date, creator. Used to pre-populate the report header.
+- deadline is optional
+- owner defaults to `Unknown` when absent
+- vague, ownerless action language is allowed only if it still meets the extraction
+  threshold for a commitment; otherwise it belongs in `open_questions` or is dropped
 
----
+### 10.5 Canonical cache policy
 
-## 4. Voxtral Transcription
-
-See [RFC-0002](./rfcs/RFC-0002-voxtral-multilingual-transcription.md) for the full specification.
-
-Summary:
-- Voxtral transcribes audio with timestamps at the word level (or segment level, depending on API capability)
-- Language is tagged per segment: `[FR]`, `[EN]`, `[DE]`, etc.
-- Code-switching within a segment is handled by tagging the segment with the primary language and noting the switch
-- Confidence scores per segment are recorded and used for quality flagging
-
-### Transcript format
-
-```typescript
-interface Transcript {
-  duration_s: number;
-  language_detected: string[];   // e.g., ["fr", "en"]
-  segments: TranscriptSegment[];
-}
-
-interface TranscriptSegment {
-  start_s: number;         // seconds from start
-  end_s: number;
-  text: string;            // transcribed text
-  language: string;        // ISO 639-1 language code
-  speaker_id: string | null; // assigned after diarization
-  confidence: number;      // 0.0 - 1.0
-  code_switch: boolean;    // true if segment contains language switches
-}
-```
+- cache keys are request-policy fingerprints, not only content hashes plus model names
 
 ---
 
-## 5. Speaker Attribution
+## 11. Traceability Snapshot
 
-See [RFC-0004](./rfcs/RFC-0004-speaker-attribution.md).
-
-`parler` does not use pyannote or any local diarization model (to avoid a heavyweight ML dependency). Instead, it uses a two-pass approach:
-
-**Pass 1: Speaker labeling from context**
-Use Mistral to infer speaker turns from the transcript text. In many meeting transcripts, speaker changes are inferable from:
-- Question-answer patterns
-- Name references ("thanks Pierre", "as Sophie mentioned")
-- Topic shifts
-- Pronoun changes
-
-**Pass 2: Name resolution**
-When names appear in the transcript, use them to replace generic `Speaker 1`, `Speaker 2` labels with actual names.
-
-This approach works well for structured meetings. For informal or noisy conversations, the speaker attribution will be less accurate and is noted as `confidence: low` in the output.
+| Domain | Canonical RFCs | Primary BDD | Primary TDD |
+|--------|----------------|-------------|-------------|
+| Pipeline and CLI | RFC-0001 | `features/cli_interface.feature`, `features/error_handling.feature` | `tests/unit/test_pipeline_orchestration.py`, `tests/unit/test_config_loading.py` |
+| Transcription | RFC-0002 | `features/transcription.feature`, `features/multilingual.feature`, `features/caching.feature` | `tests/unit/test_audio_ingestion.py`, `tests/unit/test_chunk_assembly.py`, `tests/unit/test_transcript_quality.py`, `tests/integration/test_voxtral_integration.py` |
+| Extraction | RFC-0003 | `features/decision_extraction.feature` | `tests/unit/test_decision_extraction_parsing.py`, `tests/unit/test_deadline_resolution.py`, `tests/integration/test_mistral_extraction.py`, `tests/property/test_parsing_properties.py` |
+| Speaker resolution | RFC-0004 | `features/speaker_attribution.feature` | `tests/unit/test_speaker_attribution.py` |
+| Rendering and export | RFC-0005 | `features/output_formats.feature` | `tests/unit/test_report_rendering.py`, `tests/integration/test_export_integrations.py` |
 
 ---
 
-## 6. Decision Extraction
+## 12. Exit Criteria for “Spec Complete”
 
-See [RFC-0003](./rfcs/RFC-0003-decision-extraction-schema.md) for the full schema.
+The specification baseline is considered complete only when:
 
-The decision extraction stage passes the full transcript (with speaker labels and timestamps) to `mistral-large-latest` with a structured extraction prompt. The model outputs a JSON object containing:
+1. `SPEC.md`, `SDD.md`, and `TESTING.md` agree on the canonical data model
+2. every cache, checkpoint, and config contract is defined exactly once
+3. every draft RFC is either synchronized to the baseline or explicitly marked as
+   superseded detail
+4. every major feature area has an implementation phase and test plan
 
-- `decisions`: things that were decided
-- `commitments`: things that people committed to doing
-- `rejected`: proposals that were explicitly rejected
-- `open_questions`: things that were raised but not resolved
-
-Each item includes:
-- Timestamp reference
-- Speaker attribution
-- Supporting quote from the transcript
-- Confidence score (based on the model's certainty about the extraction)
-
-### Decision vs. Action Item distinction
-
-This is the critical UX insight that makes `parler` different from generic meeting summarizers:
-
-- **Decision**: a conclusion about what will happen. "We will launch on May 15." Not necessarily tied to a specific person — it's the team's decision.
-- **Commitment**: a specific person's promise to do something by a specific time. "@Marie will review the checklist by Friday." Always has an owner; usually has a deadline.
-- **Open question**: something raised but not resolved. "We still don't know who handles legal review." Requires a follow-up.
-- **Rejection**: something explicitly decided against. "We won't use GPT-4o — too expensive and US-dependency."
-
-The distinction matters because different people need different views: a project manager needs commitments; an executive needs decisions; a next-meeting agenda needs open questions.
-
----
-
-## 7. Report Rendering
-
-See [RFC-0005](./rfcs/RFC-0005-report-format-and-export.md).
-
-Three output formats:
-
-### Markdown (default)
-
-Human-readable, copy-pasteable into Notion, Confluence, GitHub issues. Designed to look good in any Markdown renderer.
-
-### HTML
-
-Self-contained HTML with inline CSS. Designed to look good as a screenshot. Shareable without any tooling. Includes a timeline view showing when in the meeting each decision happened.
-
-### JSON
-
-Machine-readable. Designed for import into task management tools. Schema is designed to map directly to Notion pages, Linear issues, and Jira tickets.
-
----
-
-## 8. Export Integrations
-
-Post-MVP, `parler` will support direct export to:
-
-| Integration | What gets created |
-|-------------|------------------|
-| Notion | One database entry per decision; one linked task per commitment |
-| Linear | One issue per commitment, with due date and assignee |
-| Jira | One ticket per commitment |
-| Slack | Formatted message with the decision log (via webhook) |
-
----
-
-## 9. Cost and Latency Estimates
-
-For a 45-minute meeting in French/English:
-
-| Stage | Estimated time | Estimated cost |
-|-------|---------------|---------------|
-| Audio chunking | <5s (local) | $0 |
-| Voxtral transcription | 30–60s | ~$0.15 |
-| Decision extraction | 15–30s | ~$0.08 |
-| Report rendering | <2s (local) | $0 |
-| **Total** | **~60–90s** | **~$0.23** |
-
-A 2-hour earnings call: ~$0.80 total.
-
----
-
-## 10. Privacy Considerations
-
-Meeting recordings often contain personal data. `parler` is designed with privacy in mind:
-
-- Audio is sent to Voxtral API (EU servers) and not retained by default (per Mistral's data processing terms)
-- Transcripts and decision logs are stored locally by default (no cloud sync unless explicitly configured)
-- Names of speakers are extracted from the transcript for attribution but can be anonymized with `--anonymize-speakers`
-- The `--local` flag (future, using self-hosted Voxtral when available) routes all processing to a local model
-
----
-
-## References
-
-- [RFC-0001: Architecture and Pipeline](./rfcs/RFC-0001-architecture-and-pipeline.md)
-- [RFC-0002: Voxtral Integration](./rfcs/RFC-0002-voxtral-multilingual-transcription.md)
-- [RFC-0003: Decision Extraction Schema](./rfcs/RFC-0003-decision-extraction-schema.md)
-- [RFC-0004: Speaker Attribution](./rfcs/RFC-0004-speaker-attribution.md)
-- [RFC-0005: Report Format and Export](./rfcs/RFC-0005-report-format-and-export.md)
-- [Mistral Voxtral docs](https://docs.mistral.ai/capabilities/audio/)
+That is the standard this repository should now operate under.
