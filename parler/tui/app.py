@@ -178,6 +178,23 @@ FIXTURE_PRESETS: dict[str, FixturePreset] = {
 
 DEFAULT_STARTUP_FIXTURE = "fr"
 VOXPOPULI_FIXTURE_KEYS = tuple(key for key in FIXTURE_PRESETS if key.startswith("voxpopuli_"))
+
+_STAGE_SYMBOLS: dict[str, str] = {
+    "pending": "○",
+    "running": "◉",
+    "complete": "✓",
+    "error": "✗",
+    "skipped": "─",
+}
+
+# Short display names for model selectors (strip "-latest" and trim vendor prefix for tightness)
+_MODEL_SHORT: dict[str, str] = {
+    "voxtral-mini-latest": "voxtral-mini",
+    "voxtral-small-latest": "voxtral-small",
+    "mistral-medium-latest": "mistral-medium",
+    "mistral-large-latest": "mistral-large",
+}
+
 VOXPOPULI_FIXTURE_OPTIONS = tuple(
     (FIXTURE_PRESETS[key].name, key) for key in VOXPOPULI_FIXTURE_KEYS
 )
@@ -333,11 +350,7 @@ class ParlerTUIApp(App[None]):
                 yield Static("Ctrl+P palette", id="topbar-hint", classes="topbar-pill quiet")
         with Horizontal(id="shell"):
             with VerticalScroll(id="sidebar"):
-                yield Static(
-                    "parler 🇫🇷 FR\nFrench-built meeting intelligence\n\n"
-                    "Turn audio into explicit decisions, commitments, and polished reports.",
-                    id="brand-card",
-                )
+                yield Static("parler 🇫🇷  · meet intelligence", id="sidebar-brand")
                 with Vertical(id="action-cluster"):
                     yield Label("Operate", classes="cluster-title")
                     yield Button("Run pipeline", id="run-button", variant="primary")
@@ -364,8 +377,7 @@ class ParlerTUIApp(App[None]):
                         classes="fixture-button",
                     )
                     yield Static(
-                        "The synthetic French meeting is preloaded on startup for a true end-to-end showcase. "
-                        "Use the VoxPopuli clips below when you want a real French transcription demo.",
+                        "Synthetic FR demo preloaded.\nVoxPopuli = real French audio.",
                         id="fixture-help",
                     )
                     yield Label("Synthetic demos", classes="cluster-title")
@@ -520,7 +532,7 @@ class ParlerTUIApp(App[None]):
                         yield RichLog(
                             id="run-log",
                             wrap=True,
-                            markup=False,
+                            markup=True,
                             highlight=False,
                             auto_scroll=True,
                         )
@@ -891,13 +903,15 @@ class ParlerTUIApp(App[None]):
         self._reset_runtime(request)
         self._refresh_metrics()
         audio_label = preset.path.name
-        mode_label = "Transcription demo" if preset.transcribe_only else "Decision demo"
-        mode_detail = (
-            "Real VoxPopuli sample, ready to run immediately."
-            if fixture_key in VOXPOPULI_FIXTURE_KEYS
-            else preset.name
-        )
-        self._set_metric("#metric-mode", "Mode", mode_label, mode_detail)
+        t_model = _MODEL_SHORT.get(request.transcription_model or "", "voxtral")
+        e_model = _MODEL_SHORT.get(request.extraction_model or "", "mistral")
+        if preset.transcribe_only:
+            models_val = t_model
+            models_detail = "transcription only"
+        else:
+            models_val = f"{t_model} → {e_model}"
+            models_detail = "speech→text  →  extraction"
+        self._set_metric("#metric-mode", "Models", models_val, models_detail)
         self._set_metric("#metric-audio", "Audio", audio_label, preset.summary or "fixture loaded")
         if preview:
             self.preview_path((self.project_root / preset.path).resolve())
@@ -1064,30 +1078,48 @@ class ParlerTUIApp(App[None]):
     def _about_markdown(self) -> str:
         return (
             "# parler 🇫🇷\n\n"
-            "A Textual cockpit for the full parler workflow.\n\n"
-            "## What this UI is for\n\n"
-            "- run the pipeline against local audio files, synthetic fixtures, or real VoxPopuli FR clips\n"
-            "- watch stage-by-stage progress in real time\n"
-            "- inspect transcripts, decisions, commitments, questions, and rejected proposals\n"
-            "- browse cache artifacts and project files without leaving the app\n"
-            "- keep everything keyboard-driven via bindings and the command palette\n\n"
-            "The app boots with the synthetic French meeting preloaded so the full decision pipeline works immediately.\n\n"
-            "## Quick keys\n\n"
-            "- `Ctrl+R`: run pipeline\n"
-            "- `Ctrl+O`: load checkpoint\n"
-            "- `Ctrl+1..4`: switch tabs\n"
-            "- `Ctrl+F`: French fixture\n"
-            "- `Ctrl+B`: bilingual fixture\n"
-            "- `Ctrl+E`: earnings fixture\n"
-            "- `Ctrl+G`: focus file tree\n"
-            "- `F5`: refresh cache\n"
-            "- `Ctrl+P`: command palette\n\n"
+            "> Turn recorded audio into a structured Decision Log — "
+            "transcription, speaker attribution, extraction, and polished reports.\n\n"
+            "---\n\n"
+            "## What this cockpit does\n\n"
+            "| Capability | Detail |\n"
+            "|---|---|\n"
+            "| **Audio → transcript** | Voxtral transcription with language detection |\n"
+            "| **Speaker attribution** | Diarization-backed or text-cue heuristics |\n"
+            "| **Decision extraction** | Mistral-backed structured JSON output |\n"
+            "| **Reports** | Markdown / HTML / JSON decision logs |\n"
+            "| **Live progress** | Stage-by-stage real-time updates in Studio |\n"
+            "| **Artifact browser** | Cache and project file preview without leaving the app |\n\n"
+            "---\n\n"
+            "## Keyboard shortcuts\n\n"
+            "| Key | Action |\n"
+            "|---|---|\n"
+            "| `Ctrl+R` | Run pipeline |\n"
+            "| `Ctrl+O` | Load checkpoint |\n"
+            "| `Ctrl+1` — `4` | Switch tabs |\n"
+            "| `Ctrl+F` | Load French fixture |\n"
+            "| `Ctrl+B` | Load bilingual fixture |\n"
+            "| `Ctrl+E` | Load earnings fixture |\n"
+            "| `Ctrl+G` | Focus file tree |\n"
+            "| `F5` | Refresh cache |\n"
+            "| `Ctrl+P` | Command palette |\n\n"
+            "---\n\n"
             "## Showcase flow\n\n"
-            "1. Start with the preloaded synthetic French meeting for the full pipeline, or switch to a VoxPopuli clip for real-audio transcription.\n"
-            "2. Press `Ctrl+R`.\n"
-            "3. Watch the stage strip and runtime log.\n"
-            "4. Review the transcript or structured output in Results.\n"
-            "5. Use Artifacts to inspect cache entries and local files.\n"
+            "1. The **synthetic French meeting** is preloaded on boot — full pipeline ready.\n"
+            "2. Press **`Ctrl+R`** to run.\n"
+            "3. Watch the **stage strip** and **runtime log** in Studio.\n"
+            "4. Switch to **Results** — explore the report, transcript, decisions table.\n"
+            "5. Open **Artifacts** to browse cache entries and project files.\n"
+            "6. Swap to a **VoxPopuli FR clip** for a real-audio transcription demo.\n\n"
+            "---\n\n"
+            "## Pipeline stages\n\n"
+            "```\n"
+            "○ Ingest     → probe audio, extract metadata\n"
+            "○ Transcribe → Voxtral speech-to-text\n"
+            "○ Attribute  → speaker diarization + label resolution\n"
+            "○ Extract    → Mistral structured decision extraction\n"
+            "○ Render     → Markdown / HTML / JSON report\n"
+            "```\n"
         )
 
     def _resolved_cache_dir(self) -> Path:
@@ -1107,12 +1139,16 @@ class ParlerTUIApp(App[None]):
         return "json"
 
     def _handle_stage_start(self, stage: PipelineStage) -> None:
-        self._set_stage(stage, "running", "Running")
+        model = self._stage_model_label(stage)
+        self._set_stage(stage, "running", model if model else "Running")
         self.sub_title = f"{STAGE_LABELS[stage]}…"
-        self._write_log(f"{STAGE_LABELS[stage]} started")
+        log_suffix = f"  [{model}]" if model else ""
+        self._write_log(f"{STAGE_LABELS[stage]} started{log_suffix}")
 
     def _handle_stage_complete(self, stage: PipelineStage, duration: float) -> None:
-        self._set_stage(stage, "complete", f"{duration:.1f}s")
+        model = self._stage_model_label(stage)
+        detail = f"{model} · {duration:.1f}s" if model else f"{duration:.1f}s"
+        self._set_stage(stage, "complete", detail)
         progress = self._completed_stage_count()
         self.query_one("#stage-progress", ProgressBar).update(progress=progress)
         self._write_log(f"{STAGE_LABELS[stage]} complete in {duration:.1f}s")
@@ -1141,11 +1177,13 @@ class ParlerTUIApp(App[None]):
                 self._set_stage(stage, "complete", "Ready")
                 continue
             if stage in state.completed_stages:
-                self._set_stage(stage, "complete", "Done")
+                model = self._stage_model_label(stage)
+                self._set_stage(stage, "complete", f"{model} · Done" if model else "Done")
             elif request is not None and stage not in request.expected_stages():
-                self._set_stage(stage, "skipped", "Skipped")
+                self._set_stage(stage, "skipped", "─")
             else:
-                self._set_stage(stage, "pending", "Pending")
+                model = self._stage_model_label(stage)
+                self._set_stage(stage, "pending", model if model else "Pending")
         self.query_one("#stage-progress", ProgressBar).update(
             total=len(expected),
             progress=sum(
@@ -1157,9 +1195,33 @@ class ParlerTUIApp(App[None]):
 
     def _set_stage(self, stage: PipelineStage, tone: str, detail: str) -> None:
         tile = self.query_one(f"#stage-{stage.name.lower()}", Static)
-        tile.update(f"{STAGE_LABELS[stage]}\n{detail}")
+        symbol = _STAGE_SYMBOLS.get(tone, "○")
+        label = STAGE_LABELS[stage]
+        if tone == "running":
+            text = f"[bold]{symbol} {label}[/bold]\n  {detail}"
+        elif tone == "complete":
+            text = f"{symbol} {label}\n  [dim]{detail}[/dim]"
+        elif tone in ("pending", "skipped"):
+            text = f"[dim]{symbol} {label}[/dim]\n  [dim]{detail}[/dim]"
+        elif tone == "error":
+            text = f"[bold]{symbol} {label}[/bold]\n  [bold]{detail}[/bold]"
+        else:
+            text = f"{symbol} {label}\n  {detail}"
+        tile.update(text)
         tile.remove_class("is-pending", "is-running", "is-complete", "is-error", "is-skipped")
         tile.add_class(f"is-{tone}")
+
+    def _stage_model_label(self, stage: PipelineStage) -> str | None:
+        """Return the short model name for model-backed stages, or None."""
+        if self.current_request is None:
+            return None
+        if stage == PipelineStage.TRANSCRIBE:
+            raw = self.current_request.transcription_model or ""
+            return _MODEL_SHORT.get(raw, raw) or None
+        if stage == PipelineStage.EXTRACT:
+            raw = self.current_request.extraction_model or ""
+            return _MODEL_SHORT.get(raw, raw) or None
+        return None
 
     def _set_busy(self, busy: bool) -> None:
         self.query_one("#run-button", Button).disabled = busy
@@ -1167,7 +1229,9 @@ class ParlerTUIApp(App[None]):
         if busy:
             self._set_topbar_pill("#topbar-mode", "Running", tone="accent")
             self.query_one("#run-summary", Static).update(
-                "Pipeline in flight.\nThe app stays responsive while workers handle API calls."
+                "[bold]Pipeline in flight.[/bold]\n"
+                "Workers are handling API calls — the UI stays live.\n"
+                "[dim]Watch the stage strip for real-time progress.[/dim]"
             )
         else:
             self.sub_title = "Decision intelligence cockpit"
@@ -1179,45 +1243,55 @@ class ParlerTUIApp(App[None]):
         expected = request.expected_stages() if request is not None else tuple(PipelineStage)
         for stage in PipelineStage:
             if stage in expected:
-                self._set_stage(stage, "pending", "Waiting")
+                model_label = self._stage_model_label(stage) if request is not None else None
+                self._set_stage(stage, "pending", model_label if model_label else "Waiting")
             else:
-                self._set_stage(stage, "skipped", "Skipped")
+                self._set_stage(stage, "skipped", "─")
         self.query_one("#stage-progress", ProgressBar).update(total=len(expected), progress=0)
         if request is not None:
-            participants = ", ".join(request.participants) or "auto speaker labels"
+            participants = ", ".join(request.participants) or "auto"
             languages = ", ".join(request.languages) or "auto"
-            trace_detail = f"\nTrace: {self.current_trace_id}" if self.current_trace_id else ""
-            mode = (
-                "Transcription-first demo" if request.transcribe_only else "Full decision pipeline"
-            )
-            next_step = (
-                "Press Run now for a live French transcript."
+            trace_id = self.current_trace_id[:12] if self.current_trace_id else None
+            trace_detail = f"\n[dim]Trace[/dim]  {trace_id}" if trace_id else ""
+            mode = "Transcription" if request.transcribe_only else "Full pipeline"
+            t_model = _MODEL_SHORT.get(request.transcription_model or "", "voxtral")
+            e_model = _MODEL_SHORT.get(request.extraction_model or "", "mistral")
+            if request.transcribe_only:
+                models_line = f"\n[dim]Model[/dim]  {t_model}"
+            else:
+                models_line = (
+                    f"\n[dim]Speech→text[/dim]  {t_model}  "
+                    f"[dim]→[/dim]  "
+                    f"[dim]Extraction[/dim]  {e_model}"
+                )
+            hint = (
+                "Press [bold]Ctrl+R[/bold] for a live transcript."
                 if request.transcribe_only
-                else "Press Run now for the full structured output pipeline."
+                else "Press [bold]Ctrl+R[/bold] to run."
             )
             self.query_one("#run-summary", Static).update(
-                "Ready to run.\n"
-                f"{request.input_path.name}\n"
-                f"Mode: {mode}\n"
-                f"Languages: {languages}\n"
-                f"Participants: {participants}\n"
-                f"Format: {request.output_format}\n"
-                f"{next_step}"
+                f"[bold]{request.input_path.name}[/bold]\n"
+                f"[dim]Mode[/dim]  {mode}  [dim]·[/dim]  "
+                f"[dim]Lang[/dim]  {languages}  [dim]·[/dim]  "
+                f"[dim]Format[/dim]  {request.output_format}"
+                f"{models_line}\n"
+                f"[dim]Speakers[/dim]  {participants}\n"
+                f"{hint}"
                 f"{trace_detail}"
             )
         else:
             self.query_one("#run-summary", Static).update(
-                "Ready for a run.\n"
+                "[bold]Ready.[/bold]\n"
                 "Load a fixture or point at your own audio.\n"
-                "If API access is missing, add MISTRAL_API_KEY to .env."
+                "[dim]Add MISTRAL_API_KEY to .env for API access.[/dim]"
             )
 
     def _write_log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.query_one("#run-log", RichLog).write(f"[{timestamp}] {message}")
+        self.query_one("#run-log", RichLog).write(f"[dim]{timestamp}[/]  {message}")
 
     def _refresh_metrics(self) -> None:
-        self._set_metric("#metric-mode", "Mode", "Idle", "Textual showcase")
+        self._set_metric("#metric-mode", "Models", "─", "load a demo or run")
         api_ready = (
             "Ready"
             if (os.environ.get("MISTRAL_API_KEY") or os.environ.get("PARLER_API_KEY"))
@@ -1249,7 +1323,21 @@ class ParlerTUIApp(App[None]):
             else "no audio metadata"
         )
         self._set_topbar_pill("#topbar-mode", "Loaded", tone="good")
-        self._set_metric("#metric-mode", "Mode", "Complete", "results loaded")
+        if self.current_request is not None:
+            t = _MODEL_SHORT.get(self.current_request.transcription_model or "", "voxtral")
+            e = _MODEL_SHORT.get(self.current_request.extraction_model or "", "mistral")
+            if self.current_request.transcribe_only:
+                models_val = t
+                models_detail = "transcription only"
+            else:
+                models_val = f"{t} → {e}"
+                models_detail = "speech→text  →  extraction"
+        else:
+            report_model = state.decision_log.metadata.model if state.decision_log else "n/a"
+            e = _MODEL_SHORT.get(report_model, report_model)
+            models_val = f"voxtral → {e}"
+            models_detail = "two-stage pipeline"
+        self._set_metric("#metric-mode", "Models", models_val, models_detail)
         self._set_metric("#metric-audio", "Audio", audio_label, audio_detail)
         decision_count = len(state.decision_log.decisions) if state.decision_log is not None else 0
         commitment_count = (
@@ -1267,7 +1355,9 @@ class ParlerTUIApp(App[None]):
         self._set_metric("#metric-languages", "Languages", languages or "-", "detected")
 
     def _set_metric(self, widget_id: str, label: str, value: str, detail: str) -> None:
-        self.query_one(widget_id, Static).update(f"{label}\n{value}\n{detail}")
+        self.query_one(widget_id, Static).update(
+            f"[bold]{label}[/bold]  {value}\n[dim]{detail}[/dim]"
+        )
 
     def _set_topbar_pill(self, widget_id: str, text: str, *, tone: str) -> None:
         pill = self.query_one(widget_id, Static)
@@ -1281,12 +1371,31 @@ class ParlerTUIApp(App[None]):
         decision_count = len(state.decision_log.decisions) if state.decision_log else 0
         commitment_count = len(state.decision_log.commitments) if state.decision_log else 0
         report_model = state.decision_log.metadata.model if state.decision_log else "n/a"
-        trace_line = f"\nTrace: {self.current_trace_id}" if self.current_trace_id else ""
+        trace_id = self.current_trace_id[:12] if self.current_trace_id else None
+        trace_line = f"\n[dim]Trace[/dim]  {trace_id}" if trace_id else ""
+        # Build model line — show both models when available
+        if self.current_request is not None:
+            t = _MODEL_SHORT.get(self.current_request.transcription_model or "", "voxtral")
+            e = _MODEL_SHORT.get(self.current_request.extraction_model or "", "mistral")
+            if self.current_request.transcribe_only:
+                model_line = f"\n[dim]Speech→text[/dim]  {t}"
+            else:
+                model_line = (
+                    f"\n[dim]Speech→text[/dim]  {t}  "
+                    f"[dim]→[/dim]  "
+                    f"[dim]Extraction[/dim]  {e}"
+                )
+        else:
+            e_short = _MODEL_SHORT.get(report_model, report_model)
+            model_line = f"\n[dim]Extraction model[/dim]  {e_short}"
         self.query_one("#results-hero", Static).update(
-            f"{source}\n"
-            f"Languages: {language_text}\n"
-            f"Decisions: {decision_count} · Commitments: {commitment_count}\n"
-            f"Model: {report_model}"
+            f"[bold]{source}[/bold]\n"
+            f"[dim]Languages[/dim]  {language_text}  "
+            f"[dim]·[/dim]  "
+            f"[dim]Decisions[/dim]  [bold]{decision_count}[/bold]  "
+            f"[dim]·[/dim]  "
+            f"[dim]Commitments[/dim]  [bold]{commitment_count}[/bold]"
+            f"{model_line}"
             f"{trace_line}"
         )
 

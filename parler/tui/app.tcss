@@ -1,26 +1,33 @@
+/* ═══════════════════════════════════════════════
+   parler · Textual studio
+   Design system — polished deep-navy theme
+   ═══════════════════════════════════════════════ */
+
 Screen {
-    background: #09101d;
-    color: #f6f2ea;
+    background: #060d1b;
+    color: #d8e4f4;
 }
+
+/* ─── Top bar ──────────────────────────────────── */
 
 #topbar {
     height: 3;
-    padding: 0 1;
-    background: #f5eee1;
-    color: #10203a;
-    border-bottom: tall #153761;
+    padding: 0 2;
+    background: #ede6da;
+    color: #0a1828;
+    border-bottom: tall #1a3a6a;
 }
 
 #topbar-brand {
     width: auto;
     margin-right: 2;
-    color: #10203a;
+    color: #0a1828;
     text-style: bold;
 }
 
 #topbar-title {
     width: 1fr;
-    color: #516177;
+    color: #4a607a;
     text-style: bold;
 }
 
@@ -34,37 +41,41 @@ Screen {
     height: 3;
     margin-left: 1;
     padding: 0 1;
-    background: #e8dfcf;
-    color: #1a2942;
-    border: round #d9cfbe;
+    background: #d8d0c2;
+    color: #18304a;
+    border: round #c2b8a8;
 }
 
 .topbar-pill.accent {
-    background: #153761;
-    color: #f9f5ee;
-    border: round #5d90eb;
+    background: #0e40a8;
+    color: #d8e8ff;
+    border: round #3868d8;
 }
 
 .topbar-pill.good {
-    background: #153b2d;
-    color: #effcf4;
-    border: round #2fb06d;
+    background: #073520;
+    color: #70e0a8;
+    border: round #157848;
 }
 
 .topbar-pill.warn {
-    background: #4b2512;
-    color: #fff1e4;
-    border: round #df8e44;
+    background: #3a1808;
+    color: #ffc060;
+    border: round #b06010;
 }
 
 .topbar-pill.quiet {
-    color: #6d7787;
+    background: transparent;
+    color: #3a4e60;
+    border: round transparent;
 }
 
 #topbar.compact #topbar-title,
 #topbar.compact #topbar-hint {
     display: none;
 }
+
+/* ─── Shell ────────────────────────────────────── */
 
 #shell {
     height: 1fr;
@@ -75,104 +86,162 @@ Screen {
     layout: vertical;
 }
 
+/* ─── Sidebar ──────────────────────────────────── */
+
 #sidebar {
-    width: 30;
-    min-width: 26;
+    width: 28;
+    min-width: 24;
     padding: 1;
-    background: #0f1d31;
-    border-right: tall #1a365d;
+    background: #071422;
+    border-right: tall #142840;
 }
 
 #shell.stack #sidebar {
     width: 1fr;
-    height: 18;
+    height: 20;
     border-right: none;
-    border-bottom: tall #1a365d;
+    border-bottom: tall #142840;
 }
 
-#brand-card {
+#sidebar-brand {
     margin: 0 0 1 0;
-    padding: 1 2;
-    background: #f7f0e4;
-    color: #10203a;
-    border: round #ead9c0;
-    border-left: heavy #1d5fbf;
+    padding: 0 1;
+    color: #5880a8;
     text-style: bold;
+    border-bottom: tall #0f2438;
+}
+
+/* brand-card hidden — sidebar-brand replaces it */
+#brand-card {
+    display: none;
 }
 
 #action-cluster,
 #fixture-cluster,
 #telemetry-cluster {
-    margin: 1 0 0 0;
+    margin: 0 0 1 0;
     padding: 1;
-    background: #111f35;
-    border: round #20395c;
+    background: #0a1c33;
+    border: round #16284a;
 }
 
 .cluster-title {
     margin: 0 0 1 0;
-    color: #efc76a;
+    color: #c08830;
     text-style: bold;
 }
+
+/* ─── Buttons ──────────────────────────────────── */
 
 Button {
     width: 1fr;
     margin: 0 0 1 0;
+    height: 3;
+    min-height: 3;
 }
 
 #run-button {
-    background: #1d5fbf;
-    color: #f8f5ee;
+    background: #0c3c9a;
+    color: #d8e8ff;
     text-style: bold;
+    border: tall #2860d8;
+}
+
+#run-button:hover {
+    background: #1248b8;
+}
+
+#run-button:focus {
+    border: tall #4878f0;
+}
+
+#run-button:disabled {
+    background: #091e45;
+    color: #2a4060;
+    border: tall #162a50;
+}
+
+#load-state-button,
+#refresh-cache-button,
+#clear-form-button {
+    background: #0b1b30;
+    color: #6888a8;
+    border: round #182a40;
+    height: 3;
 }
 
 #fixture-cluster Button {
-    background: #16263f;
-    color: #f4efe7;
+    background: #091728;
+    color: #5878a0;
+    border: round #142235;
+    height: 2;
+    min-height: 2;
+    margin: 0 0 1 0;
+    padding: 0 1;
+}
+
+#fixture-fr-default-button {
+    background: #0f2c60;
+    color: #90b8f0;
+    border: tall #2050a0;
+    text-style: bold;
+    height: 3;
+    min-height: 3;
 }
 
 #fixture-help {
     margin: 0 0 1 0;
-    padding: 1;
-    background: #132038;
-    color: #c6d7f3;
-    border: round #274164;
+    padding: 0 1;
+    color: #2e4860;
+    background: transparent;
+    border-left: heavy #162840;
 }
+
+/* ─── Metric cards ─────────────────────────────── */
 
 .metric-card {
     margin: 0 0 1 0;
-    padding: 1 2;
-    min-height: 4;
-    background: #16243b;
-    color: #edf2fb;
-    border: round #253f64;
+    padding: 0 1;
+    min-height: 3;
+    background: #0a1c33;
+    color: #80a0c8;
+    border-left: heavy #183860;
 }
+
+/* ─── Main content area ────────────────────────── */
 
 #main-tabs {
     width: 1fr;
     height: 1fr;
     min-width: 0;
-    background: #0b1424;
+    background: #081422;
 }
 
 Tabs {
-    background: #0e1a2f;
-    border-bottom: tall #1d3658;
+    background: #060d1b;
+    border-bottom: tall #142840;
 }
 
 Tab {
-    padding: 0 1;
-    color: #91a7cb;
+    padding: 0 2;
+    color: #304860;
     text-style: bold;
 }
 
 Tab.-active {
-    color: #f6f2ea;
+    color: #b8d0f0;
+    background: #0a1830;
+}
+
+Tab:hover {
+    color: #6888a8;
 }
 
 TabPane {
     padding: 1 2 2 2;
 }
+
+/* ─── Studio layout ────────────────────────────── */
 
 #studio-layout,
 #artifacts-layout {
@@ -189,8 +258,8 @@ TabPane {
     width: 2fr;
     min-width: 54;
     padding: 1 2;
-    background: #0f1829;
-    border: round #203554;
+    background: #071222;
+    border: round #10223a;
 }
 
 #form-scroll.compact .field-row,
@@ -222,18 +291,22 @@ TabPane {
     padding-left: 0;
 }
 
+/* ─── Section titles ───────────────────────────── */
+
 .section-title {
     margin: 0 0 1 0;
     padding: 0 1;
-    background: #13233d;
-    color: #d8e5ff;
+    background: #0b1d35;
+    color: #a8c0e8;
     text-style: bold;
-    border-left: heavy #f0c96d;
+    border-left: heavy #d09030;
 }
 
 .section-title.compact {
     margin-top: 1;
 }
+
+/* ─── Form fields ──────────────────────────────── */
 
 .field-row {
     height: auto;
@@ -254,8 +327,8 @@ TabPane {
 
 .field-label,
 .switch-label {
-    margin: 0 0 1 0;
-    color: #efc76a;
+    margin: 0 0 0 0;
+    color: #c08830;
     text-style: bold;
 }
 
@@ -265,9 +338,9 @@ TabPane {
 
 #form-help {
     padding: 1;
-    background: #132038;
-    color: #c6d7f3;
-    border: round #274164;
+    background: #081423;
+    color: #305060;
+    border: round #122238;
 }
 
 Input,
@@ -280,22 +353,27 @@ Switch {
 #switch-row {
     margin-top: 1;
     padding: 1;
-    background: #111b2d;
-    border: round #213655;
+    background: #081628;
+    border: round #122438;
 }
+
+/* ─── Hero / run-summary card ──────────────────── */
 
 .hero-card {
     margin: 0 0 1 0;
     padding: 1 2;
-    min-height: 6;
-    background: #f7f0e4;
-    color: #10203a;
-    border: round #ead9c0;
+    min-height: 7;
+    background: #0b1e3a;
+    color: #a0bce0;
+    border: round #162e52;
+    border-left: heavy #1850c8;
 }
 
 .hero-card.compact {
-    min-height: 5;
+    min-height: 4;
 }
+
+/* ─── Stage progress + grid ────────────────────── */
 
 #stage-progress {
     margin: 0 0 1 0;
@@ -321,36 +399,38 @@ Switch {
 
 .stage-card {
     min-height: 5;
-    padding: 1;
-    background: #142239;
-    color: #afc1df;
-    border: round #2a456b;
+    padding: 1 1;
+    background: #0b1825;
+    color: #2e4860;
+    border: round #102030;
     text-style: bold;
 }
 
 .stage-card.is-running {
-    background: #153761;
-    color: #f4f9ff;
-    border: round #5e91ec;
+    background: #0c2255;
+    color: #88b8ff;
+    border: round #2550cc;
 }
 
 .stage-card.is-complete {
-    background: #153b2d;
-    color: #effcf4;
-    border: round #2fb06d;
+    background: #071d14;
+    color: #40c880;
+    border: round #126840;
 }
 
 .stage-card.is-error {
-    background: #4a1f29;
-    color: #fff0f2;
-    border: round #ff7081;
+    background: #250808;
+    color: #e07070;
+    border: round #b82020;
 }
 
 .stage-card.is-skipped {
-    background: #252431;
-    color: #bab8c3;
-    border: round #585a6d;
+    background: #0b1322;
+    color: #243848;
+    border: round #141e30;
 }
+
+/* ─── Content panels ───────────────────────────── */
 
 #run-log,
 #artifact-preview,
@@ -364,8 +444,8 @@ Switch {
 #question-table,
 #rejection-table,
 #file-tree {
-    background: #101b2d;
-    border: round #223b5e;
+    background: #071422;
+    border: round #102438;
 }
 
 #run-log {
@@ -397,8 +477,8 @@ Switch {
 }
 
 #file-tree {
-    width: 38;
-    min-width: 28;
+    width: 36;
+    min-width: 26;
     margin-right: 1;
 }
 
@@ -417,7 +497,10 @@ DataTable {
     height: 1fr;
 }
 
+/* ─── Footer ───────────────────────────────────── */
+
 Footer {
-    background: #f5eee1;
-    color: #10203a;
+    background: #060d1b;
+    color: #253848;
+    border-top: tall #0f2035;
 }
