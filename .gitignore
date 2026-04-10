@@ -39,3 +39,7 @@ tests/fixtures/audio/*.aiff
 
 # OS/editor noise
 .DS_Store
+.claude/tsc-cache/
+.claude/cache/
+.tldr/
+.tldrignore
