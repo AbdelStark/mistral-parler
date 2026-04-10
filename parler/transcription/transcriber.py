@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import mimetypes
+import re
 import sys
 from collections.abc import Iterable
 from contextlib import suppress
@@ -13,6 +14,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 from ..errors import APIError
+from ..local import LocalVoxtralRuntime, is_local_model, local_repo_id
 from ..models import AudioFile, RawVoxtralChunkResponse, Transcript, TranscriptSegment
 from ..util.language import detect_language_with_codeswitch, normalize_language_code
 from ..util.retry import RetryConfig, RetryExhaustedError, is_retriable_http_status, with_retry
@@ -23,6 +25,7 @@ from .quality import TranscriptQualityChecker, TranscriptQualityReport
 _SdkMistralClient: Any
 MistralFile: Any
 httpx: Any | None = None
+_LOCAL_SEGMENT_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 try:
     from mistralai.client import Mistral as _SdkMistralClient
@@ -148,6 +151,27 @@ def _requested_languages(languages: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _split_local_segments(text: str, *, duration_s: float) -> tuple[tuple[float, float, str], ...]:
+    normalized = " ".join(text.split()).strip()
+    if not normalized:
+        return ()
+    parts = [part.strip() for part in _LOCAL_SEGMENT_BOUNDARY.split(normalized) if part.strip()]
+    if not parts:
+        parts = [normalized]
+    total_weight = sum(max(len(part), 1) for part in parts)
+    cursor = 0.0
+    segments: list[tuple[float, float, str]] = []
+    for index, part in enumerate(parts):
+        if index == len(parts) - 1:
+            end = duration_s
+        else:
+            span = duration_s * (max(len(part), 1) / total_weight)
+            end = min(duration_s, cursor + span)
+        segments.append((cursor, end, part))
+        cursor = end
+    return tuple(segments)
+
+
 def _normalize_chunk_response(
     raw_response: object,
     *,
@@ -240,7 +264,59 @@ class VoxtralTranscriber:
         self.timeout_ms = timeout_ms
         self.quality_checker = TranscriptQualityChecker()
         self.last_quality_report: TranscriptQualityReport | None = None
-        self._client = MistralClient(api_key=api_key)
+        self._local_runtime = LocalVoxtralRuntime(local_repo_id(model)) if is_local_model(model) else None
+        self._client = None if self._local_runtime is not None else MistralClient(api_key=api_key)
+
+    def _transcribe_local(self, audio_file: AudioFile, languages: Iterable[str] | None) -> Transcript:
+        assert self._local_runtime is not None
+        requested_languages = _requested_languages(languages)
+        requested_language = requested_languages[0] if len(requested_languages) == 1 else None
+        transcript_text = self._local_runtime.transcribe_file(
+            audio_file.path,
+            language=requested_language,
+        )
+        normalized_text = " ".join(transcript_text.split()).strip()
+        default_language = requested_language
+        detected_language, _ = detect_language_with_codeswitch(
+            normalized_text,
+            candidates=requested_languages,
+            default=default_language,
+        )
+        segment_specs = _split_local_segments(normalized_text, duration_s=audio_file.duration_s)
+        segments = tuple(
+            TranscriptSegment(
+                id=index,
+                start_s=start_s,
+                end_s=end_s,
+                text=segment_text,
+                language=detect_language_with_codeswitch(
+                    segment_text,
+                    candidates=requested_languages,
+                    default=detected_language,
+                )[0]
+                or detected_language
+                or "",
+                speaker_id=None,
+                speaker_confidence=None,
+                confidence=0.0,
+                no_speech_prob=0.0,
+                code_switch=detect_language_with_codeswitch(
+                    segment_text,
+                    candidates=requested_languages,
+                    default=detected_language,
+                )[1],
+                words=None,
+            )
+            for index, (start_s, end_s, segment_text) in enumerate(segment_specs)
+        )
+        return Transcript(
+            text=normalized_text,
+            language=detected_language or requested_language or "",
+            duration_s=audio_file.duration_s,
+            segments=segments,
+            model=self.model,
+            content_hash=audio_file.content_hash,
+        )
 
     def _chunk_specs(self, audio_file: AudioFile) -> list[_ChunkSpec]:
         chunk_count = max(1, math.ceil(audio_file.duration_s / self.max_chunk_s))
@@ -313,6 +389,7 @@ class VoxtralTranscriber:
     ) -> RawVoxtralChunkResponse:
         def request() -> object:
             kwargs = self._request_kwargs(audio_file, languages=languages, chunk=chunk)
+            assert self._client is not None
             create = self._client.audio.transcriptions.create
             file_arg = kwargs.get("file")
             content = getattr(file_arg, "content", None)
@@ -373,15 +450,18 @@ class VoxtralTranscriber:
                 self.last_quality_report = self.quality_checker.evaluate(cached)
                 return cached
 
-        chunk_responses = [
-            self._transcribe_chunk(audio_file, languages=languages, chunk=chunk)
-            for chunk in self._chunk_specs(audio_file)
-        ]
-        transcript = assemble_chunks(
-            chunk_responses,
-            content_hash=audio_file.content_hash,
-            model=self.model,
-        )
+        if self._local_runtime is not None:
+            transcript = self._transcribe_local(audio_file, languages)
+        else:
+            chunk_responses = [
+                self._transcribe_chunk(audio_file, languages=languages, chunk=chunk)
+                for chunk in self._chunk_specs(audio_file)
+            ]
+            transcript = assemble_chunks(
+                chunk_responses,
+                content_hash=audio_file.content_hash,
+                model=self.model,
+            )
         self.last_quality_report = self.quality_checker.evaluate(transcript)
 
         if self.cache is not None:

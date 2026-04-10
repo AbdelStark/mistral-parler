@@ -10,12 +10,13 @@ from pathlib import Path
 import click
 
 from .audio.ingester import AudioIngester, prune_managed_audio_files
-from .config import CacheConfig, load_config
+from .config import CacheConfig, ParlerConfig, load_config
 from .doctor import format_doctor_report, run_doctor
 from .errors import ParlerError, ProcessingError, exit_code_for
 from .extraction.extractor import DecisionExtractor
+from .local import LOCAL_API_KEY_PLACEHOLDER, default_local_model_name
 from .models import DecisionLog, Transcript
-from .pipeline import PipelineOrchestrator
+from .pipeline import PipelineOrchestrator, PipelineStage, ProcessingState
 from .pipeline.orchestrator import estimate_cost
 from .pipeline.state import load_processing_state, save_processing_state
 from .rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
@@ -23,6 +24,15 @@ from .runlog import RunRecorder, iter_run_summaries, load_run_summary, prune_run
 from .transcription.cache import TranscriptCache
 from .util.env import DEFAULT_ENV_FILE, apply_api_key_aliases, load_env_file
 from .util.serialization import to_jsonable
+
+_STAGE_DESCRIPTIONS = {
+    PipelineStage.INGEST: "probe input and normalize audio",
+    PipelineStage.TRANSCRIBE: "call Voxtral speech-to-text",
+    PipelineStage.ATTRIBUTE: "resolve speaker labels",
+    PipelineStage.EXTRACT: "call Mistral extraction",
+    PipelineStage.RENDER: "render the decision report",
+}
+_LOCAL_MODEL_NAME = default_local_model_name()
 
 
 def _package_version() -> str:
@@ -130,6 +140,80 @@ def _echo_json(value: object) -> None:
     click.echo(json.dumps(to_jsonable(value), indent=2, ensure_ascii=False))
 
 
+def _emit_verbose(message: str, *, enabled: bool) -> None:
+    if enabled:
+        click.echo(f"[verbose] {message}", err=True)
+
+
+def _describe_checkpoint_target(checkpoint_path: Path | None, *, resume: bool) -> str:
+    if checkpoint_path is not None:
+        return str(checkpoint_path)
+    if resume:
+        return "auto (.parler-state.json)"
+    return "-"
+
+
+def _stage_start_message(
+    stage: PipelineStage,
+    *,
+    input_path: Path,
+    config: ParlerConfig,
+    output_format: str,
+) -> str:
+    if stage == PipelineStage.INGEST:
+        return f"{stage.name.lower()}: {input_path} ({_STAGE_DESCRIPTIONS[stage]})"
+    if stage == PipelineStage.TRANSCRIBE:
+        languages = ",".join(config.transcription.languages) or "auto"
+        cache_state = "on" if config.cache.enabled else "off"
+        return (
+            f"{stage.name.lower()}: model={config.transcription.model} "
+            f"languages={languages} cache={cache_state}"
+        )
+    if stage == PipelineStage.ATTRIBUTE:
+        return (
+            f"{stage.name.lower()}: participants={len(config.participants)} "
+            f"anonymize={'yes' if config.output.anonymize_speakers else 'no'}"
+        )
+    if stage == PipelineStage.EXTRACT:
+        meeting_date = config.meeting_date.isoformat() if config.meeting_date else "unspecified"
+        cache_state = "on" if config.cache.enabled else "off"
+        return (
+            f"{stage.name.lower()}: model={config.extraction.model} "
+            f"prompt={config.extraction.prompt_version} meeting_date={meeting_date} "
+            f"cache={cache_state}"
+        )
+    return f"{stage.name.lower()}: format={output_format}"
+
+
+def _describe_state(state: ProcessingState, *, transcribe_only: bool) -> tuple[str, ...]:
+    details: list[str] = []
+    if state.audio_file is not None:
+        details.append(
+            "audio="
+            f"{state.audio_file.format} duration={state.audio_file.duration_s:.1f}s "
+            f"hash={state.audio_file.content_hash}"
+        )
+    if state.transcript is not None:
+        languages = ",".join(state.transcript.detected_languages) or state.transcript.language or "-"
+        details.append(
+            "transcript="
+            f"segments={len(state.transcript.segments)} language={state.transcript.language or '-'} "
+            f"detected={languages} model={state.transcript.model or '-'}"
+        )
+    if not transcribe_only and state.decision_log is not None:
+        details.append(
+            "decision_log="
+            f"decisions={len(state.decision_log.decisions)} "
+            f"commitments={len(state.decision_log.commitments)} "
+            f"questions={len(state.decision_log.open_questions)} "
+            f"rejected={len(state.decision_log.rejected)} "
+            f"model={state.decision_log.metadata.model}"
+        )
+    if not transcribe_only and state.report is not None:
+        details.append(f"report_bytes={len(state.report.encode('utf-8'))}")
+    return tuple(details)
+
+
 def _format_run_summary(summary: dict[str, object]) -> str:
     input_path = summary.get("input_path")
     source = Path(str(input_path)).name if input_path else "-"
@@ -155,6 +239,7 @@ def _build_overrides(
     participants: tuple[str, ...],
     meeting_date_value: str | None,
     anonymize_speakers: bool,
+    local: bool,
 ) -> dict[str, object]:
     overrides: dict[str, object] = {}
     if languages:
@@ -170,6 +255,10 @@ def _build_overrides(
         overrides["meeting_date"] = parsed_meeting_date.isoformat()
     if anonymize_speakers:
         overrides["output.anonymize_speakers"] = True
+    if local:
+        overrides["api_key"] = LOCAL_API_KEY_PLACEHOLDER
+        overrides["transcription.model"] = _LOCAL_MODEL_NAME
+        overrides["extraction.model"] = _LOCAL_MODEL_NAME
     return overrides
 
 
@@ -205,6 +294,8 @@ def cli() -> None:
 @click.option("--anonymize-speakers", is_flag=True, help="Replace speaker names in outputs.")
 @click.option("--cost-estimate", is_flag=True, help="Print estimated cost without API calls.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Auto-confirm cost prompts.")
+@click.option("--local", is_flag=True, help="Run transcription and extraction with a local Voxtral model.")
+@click.option("-v", "--verbose", is_flag=True, help="Log pipeline stages and runtime details.")
 def process(
     input_path: Path,
     config_path: Path | None,
@@ -221,6 +312,8 @@ def process(
     anonymize_speakers: bool,
     cost_estimate: bool,
     assume_yes: bool,
+    local: bool,
+    verbose: bool,
 ) -> None:
     """Process an audio file into a transcript or decision report."""
 
@@ -240,8 +333,12 @@ def process(
             participants=resolved_participants,
             meeting_date_value=meeting_date_value,
             anonymize_speakers=anonymize_speakers,
+            local=local,
         )
         config = load_config(config_path=config_path, overrides=overrides)
+        if local:
+            click.echo("Estimated total cost: $0.00 (local inference)")
+            return
         audio_file = AudioIngester().ingest(input_path)
         click.echo(f"Estimated total cost: ${estimate_cost(audio_file, config):.2f}")
         return
@@ -262,15 +359,65 @@ def process(
             participants=resolved_participants,
             meeting_date_value=meeting_date_value,
             anonymize_speakers=anonymize_speakers,
+            local=local,
         )
         config = load_config(config_path=config_path, overrides=overrides)
         orchestrator = PipelineOrchestrator(config)
         resolved_format = requested_format or config.output.format
+        started_stages: list[PipelineStage] = []
+
+        _emit_verbose(
+            "command=process "
+            f"input={input_path} format={resolved_format} "
+            f"checkpoint={_describe_checkpoint_target(checkpoint_path, resume=resume)} "
+            f"resume={'yes' if resume else 'no'} "
+            f"execution={'local' if local else 'remote'}",
+            enabled=verbose,
+        )
+        _emit_verbose(
+            "models "
+            f"transcription={config.transcription.model} "
+            f"extraction={config.extraction.model}",
+            enabled=verbose,
+        )
+        _emit_verbose(
+            "context "
+            f"languages={','.join(config.transcription.languages) or 'auto'} "
+            f"participants={','.join(config.participants) or '-'} "
+            f"meeting_date={config.meeting_date.isoformat() if config.meeting_date else '-'} "
+            f"cache_dir={config.cache.directory}",
+            enabled=verbose,
+        )
+        _emit_verbose(
+            f"trace_id={recorder.trace_id} run_dir={recorder.run_dir}",
+            enabled=verbose,
+        )
 
         def confirm_cost(cost: float) -> bool:
+            _emit_verbose(f"estimated_cost=${cost:.2f}", enabled=verbose)
             if assume_yes:
                 return True
             return click.confirm(f"Estimated API cost is ${cost:.2f}. Continue?", default=False)
+
+        def on_stage_start(stage: PipelineStage) -> None:
+            recorder.stage_started(stage)
+            started_stages.append(stage)
+            _emit_verbose(
+                _stage_start_message(
+                    stage,
+                    input_path=input_path,
+                    config=config,
+                    output_format=resolved_format,
+                ),
+                enabled=verbose,
+            )
+
+        def on_stage_complete(stage: PipelineStage, duration_s: float) -> None:
+            recorder.stage_completed(stage, duration_s)
+            _emit_verbose(
+                f"{stage.name.lower()}: complete in {duration_s:.2f}s",
+                enabled=verbose,
+            )
 
         state = orchestrator.run(
             input_path,
@@ -279,11 +426,12 @@ def process(
             checkpoint_path=checkpoint_path,
             resume=resume,
             on_cost_confirm=confirm_cost,
-            on_stage_start=recorder.stage_started,
-            on_stage_complete=recorder.stage_completed,
+            on_stage_start=on_stage_start,
+            on_stage_complete=on_stage_complete,
         )
         if state is None:
             recorder.finish_cancelled()
+            _emit_verbose("pipeline cancelled before the first billable stage", enabled=verbose)
             click.echo("Processing cancelled before the first billable stage.", err=True)
             return
 
@@ -301,6 +449,7 @@ def process(
 
         if rendered_output is None:
             recorder.finish_failure(ProcessingError("No output produced."))
+            _emit_verbose("pipeline returned no output", enabled=verbose)
             click.echo("No output produced.", err=True)
             return
 
@@ -309,10 +458,32 @@ def process(
             target_path = _default_report_path(input_path, resolved_format)
         recorder.set_output_path(target_path)
         recorder.set_checkpoint_path(state.checkpoint_path)
+        if resume:
+            resumed_stages = [
+                stage.name.lower()
+                for stage in sorted(state.completed_stages, key=lambda item: item.value)
+                if stage not in started_stages
+            ]
+            if resumed_stages:
+                _emit_verbose(
+                    f"reused completed stages from checkpoint: {', '.join(resumed_stages)}",
+                    enabled=verbose,
+                )
+        if transcribe_only:
+            _emit_verbose("mode=transcribe-only; later pipeline stages were skipped", enabled=verbose)
+        elif no_diarize:
+            _emit_verbose("attribute stage skipped because --no-diarize was set", enabled=verbose)
+        for detail in _describe_state(state, transcribe_only=transcribe_only):
+            _emit_verbose(detail, enabled=verbose)
         _write_or_echo(rendered_output, target_path)
         recorder.finish_success(state)
+        _emit_verbose(
+            f"wrote_output={target_path if target_path is not None else 'stdout'}",
+            enabled=verbose,
+        )
     except Exception as exc:
         recorder.finish_failure(exc)
+        _emit_verbose(f"pipeline failed: {type(exc).__name__}: {exc}", enabled=verbose)
         raise
 
 
@@ -330,6 +501,8 @@ def process(
 @click.option("--resume", is_flag=True, help="Resume from an existing checkpoint if available.")
 @click.option("--cost-estimate", is_flag=True, help="Print estimated cost without API calls.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Auto-confirm cost prompts.")
+@click.option("--local", is_flag=True, help="Run transcription locally with a Voxtral model.")
+@click.option("-v", "--verbose", is_flag=True, help="Log pipeline stages and runtime details.")
 def transcribe(
     input_path: Path,
     config_path: Path | None,
@@ -340,6 +513,8 @@ def transcribe(
     resume: bool,
     cost_estimate: bool,
     assume_yes: bool,
+    local: bool,
+    verbose: bool,
 ) -> None:
     """Run only the transcription stage."""
 
@@ -351,8 +526,12 @@ def transcribe(
             participants=(),
             meeting_date_value=None,
             anonymize_speakers=False,
+            local=local,
         )
         config = load_config(config_path=config_path, overrides=overrides)
+        if local:
+            click.echo("Estimated total cost: $0.00 (local inference)")
+            return
         audio_file = AudioIngester().ingest(input_path)
         click.echo(f"Estimated total cost: ${estimate_cost(audio_file, config):.2f}")
         return
@@ -373,14 +552,62 @@ def transcribe(
             participants=(),
             meeting_date_value=None,
             anonymize_speakers=False,
+            local=local,
         )
         config = load_config(config_path=config_path, overrides=overrides)
         orchestrator = PipelineOrchestrator(config)
+        resolved_format = (
+            output_format.lower()
+            if output_format is not None
+            else ("json" if output_path and output_path.suffix.lower() == ".json" else "text")
+        )
+        started_stages: list[PipelineStage] = []
+
+        _emit_verbose(
+            "command=transcribe "
+            f"input={input_path} format={resolved_format} "
+            f"checkpoint={_describe_checkpoint_target(checkpoint_path, resume=resume)} "
+            f"resume={'yes' if resume else 'no'} "
+            f"execution={'local' if local else 'remote'}",
+            enabled=verbose,
+        )
+        _emit_verbose(
+            "model "
+            f"transcription={config.transcription.model} "
+            f"languages={','.join(config.transcription.languages) or 'auto'} "
+            f"cache_dir={config.cache.directory}",
+            enabled=verbose,
+        )
+        _emit_verbose(
+            f"trace_id={recorder.trace_id} run_dir={recorder.run_dir}",
+            enabled=verbose,
+        )
 
         def confirm_cost(cost: float) -> bool:
+            _emit_verbose(f"estimated_cost=${cost:.2f}", enabled=verbose)
             if assume_yes:
                 return True
             return click.confirm(f"Estimated API cost is ${cost:.2f}. Continue?", default=False)
+
+        def on_stage_start(stage: PipelineStage) -> None:
+            recorder.stage_started(stage)
+            started_stages.append(stage)
+            _emit_verbose(
+                _stage_start_message(
+                    stage,
+                    input_path=input_path,
+                    config=config,
+                    output_format=resolved_format,
+                ),
+                enabled=verbose,
+            )
+
+        def on_stage_complete(stage: PipelineStage, duration_s: float) -> None:
+            recorder.stage_completed(stage, duration_s)
+            _emit_verbose(
+                f"{stage.name.lower()}: complete in {duration_s:.2f}s",
+                enabled=verbose,
+            )
 
         state = orchestrator.run(
             input_path,
@@ -388,30 +615,45 @@ def transcribe(
             checkpoint_path=checkpoint_path,
             resume=resume,
             on_cost_confirm=confirm_cost,
-            on_stage_start=recorder.stage_started,
-            on_stage_complete=recorder.stage_completed,
+            on_stage_start=on_stage_start,
+            on_stage_complete=on_stage_complete,
         )
         if state is None:
             recorder.finish_cancelled()
+            _emit_verbose("transcription cancelled before the first billable stage", enabled=verbose)
             click.echo("Transcription cancelled before the first billable stage.", err=True)
             return
         if state.transcript is None:
             recorder.finish_failure(ProcessingError("No transcript produced."))
+            _emit_verbose("transcription produced no transcript", enabled=verbose)
             click.echo("No transcript produced.", err=True)
             return
 
-        resolved_format = (
-            output_format.lower()
-            if output_format is not None
-            else ("json" if output_path and output_path.suffix.lower() == ".json" else "text")
-        )
         payload = _render_transcript_payload(state.transcript, resolved_format)
         recorder.set_output_path(output_path)
         recorder.set_checkpoint_path(state.checkpoint_path)
+        if resume:
+            resumed_stages = [
+                stage.name.lower()
+                for stage in sorted(state.completed_stages, key=lambda item: item.value)
+                if stage not in started_stages
+            ]
+            if resumed_stages:
+                _emit_verbose(
+                    f"reused completed stages from checkpoint: {', '.join(resumed_stages)}",
+                    enabled=verbose,
+                )
+        for detail in _describe_state(state, transcribe_only=True):
+            _emit_verbose(detail, enabled=verbose)
         _write_or_echo(payload, output_path)
         recorder.finish_success(state)
+        _emit_verbose(
+            f"wrote_output={output_path if output_path is not None else 'stdout'}",
+            enabled=verbose,
+        )
     except Exception as exc:
         recorder.finish_failure(exc)
+        _emit_verbose(f"transcription failed: {type(exc).__name__}: {exc}", enabled=verbose)
         raise
 
 
@@ -434,6 +676,7 @@ def transcribe(
 @click.option(
     "--meeting-date", "meeting_date_value", help="Meeting date in ISO format (YYYY-MM-DD)."
 )
+@click.option("--local", is_flag=True, help="Run extraction locally with a Voxtral model.")
 def extract(
     state_path: Path,
     config_path: Path | None,
@@ -442,6 +685,7 @@ def extract(
     participants: tuple[str, ...],
     participants_csv: str | None,
     meeting_date_value: str | None,
+    local: bool,
 ) -> None:
     """Extract or reuse a decision log from a saved checkpoint."""
 
@@ -456,6 +700,7 @@ def extract(
             participants=resolved_participants,
             meeting_date_value=meeting_date_value,
             anonymize_speakers=False,
+            local=local,
         )
         config = load_config(config_path=config_path, overrides=overrides)
         transcript = state.attributed_transcript or state.transcript

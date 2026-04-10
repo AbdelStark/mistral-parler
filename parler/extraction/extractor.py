@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
 from ..errors import APIError
+from ..local import LocalVoxtralRuntime, is_local_model, local_repo_id
 from ..models import Commitment, Decision, DecisionLog, OpenQuestion, Rejection, Transcript
 from ..prompts.extraction import DEFAULT_EXTRACTION_PROMPT_VERSION, get_extraction_prompt
 from ..util.hashing import stable_fingerprint
@@ -17,6 +19,54 @@ from .parser import parse_extraction_response, validate_decision_log
 
 _SdkMistralClient: Any
 T = TypeVar("T")
+_LOCAL_JSON_SCHEMA_PROMPT = (
+    "Local mode instructions:\n"
+    "- Return JSON only. Prefer raw JSON without markdown fences.\n"
+    "- Use exactly this shape:\n"
+    '  {"decisions":[{"summary":str,"quote":str,"confidence":"high"|"medium","language":str|null}],'
+    '"commitments":[{"owner":str|null,"action":str,"quote":str,"confidence":"high"|"medium","language":str|null}],'
+    '"rejected":[{"summary":str,"quote":str,"confidence":"high"|"medium","language":str|null}],'
+    '"open_questions":[{"question":str,"quote":str,"confidence":"high"|"medium","language":str|null}]}\n'
+    "- Include every top-level key even when empty.\n"
+    "- Extract explicit items only."
+)
+_LOCAL_ACKNOWLEDGEMENT_PREFIX_RE = re.compile(
+    r"^(?:oui|yes|ok|okay|d'accord|sure|bien sûr|bien sur)[,\s:;-]+",
+    re.IGNORECASE,
+)
+_LOCAL_ADDRESS_CANDIDATE_RE = re.compile(r"\b([A-ZÀ-ÖØ-Þ][\wÀ-ÖØ-öø-ÿ'-]+)\s*,")
+_LOCAL_REJECTION_RE = re.compile(
+    r"\b(?:reject|rejected|rejection|rejeter|rejetons|rejeté|rejetee|rejetée)\b",
+    re.IGNORECASE,
+)
+_LOCAL_GROUP_DECISION_RE = re.compile(
+    r"\b(?:we will|we'll|we are going to|nous allons|on va)\b",
+    re.IGNORECASE,
+)
+_LOCAL_DECISION_CONTEXT_RE = re.compile(
+    r"\b(?:decision|décision|board|council|conseil)\b",
+    re.IGNORECASE,
+)
+_LOCAL_COMMITMENT_RE = re.compile(
+    r"\b(?:je vais|i will|i'll|je m'en charge|je vais m'en charger|i can take it|i'll take it|i'll handle it)\b",
+    re.IGNORECASE,
+)
+_LOCAL_QUESTION_PREFIX_RE = re.compile(
+    r"^(?:et\s+la\s+\w+\s+question,\s*|and\s+the\s+\w+\s+question,\s*)",
+    re.IGNORECASE,
+)
+_LOCAL_ADDRESS_STOPWORDS = {
+    "alors",
+    "bonjour",
+    "du",
+    "d",
+    "et",
+    "hey",
+    "ok",
+    "okay",
+    "oui",
+    "salut",
+}
 
 try:
     from mistralai.client import Mistral as _SdkMistralClient
@@ -78,6 +128,87 @@ def _usage_token(response: object, *names: str) -> int:
     return 0
 
 
+def _normalize_json_response(raw_content: str) -> str:
+    stripped = raw_content.strip()
+    if not stripped:
+        return ""
+    fenced_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        stripped = fenced_match.group(1).strip()
+
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+
+    first_brace = stripped.find("{")
+    last_brace = stripped.rfind("}")
+    if first_brace != -1 and last_brace != -1 and first_brace < last_brace:
+        candidate = stripped[first_brace : last_brace + 1].strip()
+        try:
+            json.loads(candidate)
+        except json.JSONDecodeError:
+            return stripped
+        return candidate
+    return stripped
+
+
+def _texts_overlap(left: str, right: str) -> bool:
+    normalized_left = _normalize_text(left)
+    normalized_right = _normalize_text(right)
+    if not normalized_left or not normalized_right:
+        return False
+    return normalized_left in normalized_right or normalized_right in normalized_left
+
+
+def _contains_rejection_language(text: str) -> bool:
+    return bool(_LOCAL_REJECTION_RE.search(text))
+
+
+def _normalize_question_text(text: str) -> str:
+    return _LOCAL_QUESTION_PREFIX_RE.sub("", text.strip())
+
+
+def _strip_acknowledgement_prefix(text: str) -> str:
+    return _LOCAL_ACKNOWLEDGEMENT_PREFIX_RE.sub("", text.strip()).strip()
+
+
+def _infer_addressed_name(text: str) -> str | None:
+    matches = [str(candidate) for candidate in _LOCAL_ADDRESS_CANDIDATE_RE.findall(text)]
+    for candidate in reversed(matches):
+        if candidate.lower() not in _LOCAL_ADDRESS_STOPWORDS:
+            return candidate
+    return None
+
+
+def _extract_commitment_action(text: str) -> str | None:
+    stripped = _strip_acknowledgement_prefix(text)
+    if not stripped:
+        return None
+    if not _LOCAL_COMMITMENT_RE.search(stripped):
+        return None
+    return stripped
+
+
+def _extract_decision_summary(text: str, *, previous_text: str = "") -> str | None:
+    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", text.strip())]
+    for sentence in sentences:
+        if not sentence or "?" in sentence:
+            continue
+        if not _LOCAL_GROUP_DECISION_RE.search(sentence):
+            continue
+        normalized = _normalize_text(sentence)
+        if "commencer la réunion" in normalized or "start the meeting" in normalized:
+            continue
+        if (
+            _LOCAL_DECISION_CONTEXT_RE.search(sentence)
+            or _contains_rejection_language(previous_text)
+            or normalized.startswith("nous allons donc")
+            or normalized.startswith("we will continue")
+            or normalized.startswith("we'll continue")
+        ):
+            return sentence
+    return None
+
+
 class DecisionExtractor:
     """Extract canonical decision logs from transcripts via Mistral Chat."""
 
@@ -99,7 +230,8 @@ class DecisionExtractor:
         self.max_tokens = max_tokens
         self.multi_pass_threshold = multi_pass_threshold
         self.cache = cache
-        self._client = MistralClient(api_key=api_key)
+        self._local_runtime = LocalVoxtralRuntime(local_repo_id(model)) if is_local_model(model) else None
+        self._client = None if self._local_runtime is not None else MistralClient(api_key=api_key)
 
     def _transcript_hash(self, transcript: Transcript) -> str:
         return stable_fingerprint(
@@ -155,6 +287,8 @@ class DecisionExtractor:
         pass_count: int,
     ) -> list[dict[str, str]]:
         system_prompt = get_extraction_prompt(self.prompt_version)
+        if self._local_runtime is not None:
+            system_prompt = f"{system_prompt}\n\n{_LOCAL_JSON_SCHEMA_PROMPT}"
         participant_block = ", ".join(participants or []) or "(none provided)"
         meeting_date_block = meeting_date.isoformat() if meeting_date is not None else "unknown"
         user_prompt = "\n".join(
@@ -213,14 +347,26 @@ class DecisionExtractor:
         extracted_at = _timestamp()
 
         for attempt in range(2):
+            if self._local_runtime is not None:
+                response = None
+                try:
+                    raw_content = self._local_runtime.generate_text(
+                        messages,
+                        max_new_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
+                except Exception as exc:
+                    raise self._translate_api_error(exc) from exc
+            else:
+                try:
+                    assert self._client is not None
+                    response = self._client.chat.complete(**self._api_kwargs(messages))
+                except Exception as exc:
+                    raise self._translate_api_error(exc) from exc
+                raw_content = _response_content(response)
+            normalized_content = _normalize_json_response(raw_content)
             try:
-                response = self._client.chat.complete(**self._api_kwargs(messages))
-            except Exception as exc:
-                raise self._translate_api_error(exc) from exc
-
-            raw_content = _response_content(response)
-            try:
-                payload = json.loads(raw_content)
+                payload = json.loads(normalized_content)
             except json.JSONDecodeError:
                 if attempt == 0:
                     continue
@@ -230,8 +376,16 @@ class DecisionExtractor:
                     model=self.model,
                     prompt_version=self.prompt_version,
                     extracted_at=extracted_at,
-                    input_tokens=_usage_token(response, "input_tokens", "prompt_tokens"),
-                    output_tokens=_usage_token(response, "output_tokens", "completion_tokens"),
+                    input_tokens=(
+                        _usage_token(response, "input_tokens", "prompt_tokens")
+                        if response is not None
+                        else 0
+                    ),
+                    output_tokens=(
+                        _usage_token(response, "output_tokens", "completion_tokens")
+                        if response is not None
+                        else 0
+                    ),
                     pass_count=1,
                     default_language=transcript.language or "en",
                     allowed_languages=transcript.detected_languages,
@@ -243,8 +397,16 @@ class DecisionExtractor:
                 model=self.model,
                 prompt_version=self.prompt_version,
                 extracted_at=extracted_at,
-                input_tokens=_usage_token(response, "input_tokens", "prompt_tokens"),
-                output_tokens=_usage_token(response, "output_tokens", "completion_tokens"),
+                input_tokens=(
+                    _usage_token(response, "input_tokens", "prompt_tokens")
+                    if response is not None
+                    else 0
+                ),
+                output_tokens=(
+                    _usage_token(response, "output_tokens", "completion_tokens")
+                    if response is not None
+                    else 0
+                ),
                 pass_count=1,
                 default_language=transcript.language or "en",
                 allowed_languages=transcript.detected_languages,
@@ -328,6 +490,147 @@ class DecisionExtractor:
         )
         return validate_decision_log(merged)
 
+    def _postprocess_local_log(
+        self,
+        log: DecisionLog,
+        *,
+        transcript: Transcript,
+    ) -> DecisionLog:
+        decisions: list[Decision] = []
+        for decision_item in log.decisions:
+            recovered_summary = _extract_decision_summary(decision_item.quote)
+            if recovered_summary is not None and _contains_rejection_language(decision_item.summary):
+                decision_item = replace(
+                    decision_item,
+                    summary=recovered_summary,
+                    quote=recovered_summary,
+                )
+            decisions.append(decision_item)
+
+        open_questions: list[OpenQuestion] = []
+        for question_item in log.open_questions:
+            if "?" in question_item.quote:
+                normalized_question = _normalize_question_text(question_item.quote)
+                if normalized_question:
+                    question_item = replace(question_item, question=normalized_question)
+            open_questions.append(question_item)
+
+        recovered_decisions = list(decisions)
+        recovered_commitments = list(log.commitments)
+        recovered_rejections = list(log.rejected)
+        recovered_questions = list(open_questions)
+        default_language = transcript.language or "en"
+
+        for index, segment in enumerate(transcript.segments):
+            previous_text = transcript.segments[index - 1].text if index > 0 else ""
+            next_text = (
+                transcript.segments[index + 1].text if index + 1 < len(transcript.segments) else ""
+            )
+            language = segment.language or default_language
+
+            decision_summary = _extract_decision_summary(segment.text, previous_text=previous_text)
+            if decision_summary is not None and not any(
+                _texts_overlap(decision_summary, item.summary)
+                or _texts_overlap(decision_summary, item.quote)
+                for item in recovered_decisions
+            ):
+                recovered_decisions.append(
+                    Decision(
+                        id="D0",
+                        summary=decision_summary,
+                        timestamp_s=segment.start_s,
+                        speaker=segment.speaker_id,
+                        quote=segment.text.strip(),
+                        confidence="high",
+                        language=language,
+                    )
+                )
+
+            commitment_action = _extract_commitment_action(segment.text)
+            if commitment_action is not None and "?" in previous_text:
+                owner = _infer_addressed_name(previous_text) or "Unknown"
+                if not any(
+                    _texts_overlap(commitment_action, item.action)
+                    or _texts_overlap(commitment_action, item.quote)
+                    for item in recovered_commitments
+                ):
+                    recovered_commitments.append(
+                        Commitment(
+                            id="C0",
+                            owner=owner,
+                            action=commitment_action,
+                            deadline=None,
+                            timestamp_s=segment.start_s,
+                            quote=segment.text.strip(),
+                            confidence="high",
+                            language=language,
+                        )
+                    )
+
+            normalized_question = _normalize_question_text(segment.text)
+            if "?" in segment.text and _extract_commitment_action(next_text) is None and not any(
+                _texts_overlap(normalized_question, item.question)
+                or _texts_overlap(normalized_question, item.quote)
+                for item in recovered_questions
+            ):
+                recovered_questions.append(
+                    OpenQuestion(
+                        id="Q0",
+                        question=normalized_question,
+                        asked_by=None,
+                        timestamp_s=segment.start_s,
+                        quote=segment.text.strip(),
+                        language=language,
+                        stakes=None,
+                        confidence="high",
+                    )
+                )
+
+            normalized_segment = _normalize_text(segment.text)
+            if (
+                _contains_rejection_language(segment.text)
+                and "cette décision" in normalized_segment
+                and recovered_rejections
+            ):
+                continue
+            if _contains_rejection_language(segment.text) and not any(
+                _texts_overlap(segment.text, item.summary) or _texts_overlap(segment.text, item.quote)
+                for item in recovered_rejections
+            ):
+                recovered_rejections.append(
+                    Rejection(
+                        id="R0",
+                        summary=segment.text.strip(),
+                        timestamp_s=segment.start_s,
+                        quote=segment.text.strip(),
+                        confidence="high",
+                        language=language,
+                        reason=None,
+                    )
+                )
+
+        return validate_decision_log(
+            replace(
+                log,
+                decisions=self._dedupe_collection(
+                    tuple(recovered_decisions),
+                    key_fn=self._decision_key,
+                ),
+                commitments=self._dedupe_collection(
+                    tuple(recovered_commitments),
+                    key_fn=self._commitment_key,
+                ),
+                rejected=self._dedupe_collection(
+                    tuple(recovered_rejections),
+                    key_fn=self._rejection_key,
+                ),
+                open_questions=self._dedupe_collection(
+                    tuple(recovered_questions),
+                    key_fn=self._question_key,
+                ),
+            )
+        )
+
     def extract(
         self,
         transcript: Transcript,
@@ -358,6 +661,8 @@ class DecisionExtractor:
             for index, text in enumerate(pass_texts, start=1)
         ]
         merged = self._merge_logs(logs, meeting_date=meeting_date)
+        if self._local_runtime is not None:
+            merged = self._postprocess_local_log(merged, transcript=transcript)
 
         if self.cache is not None:
             self.cache.store(transcript_hash, self.prompt_version, merged, **cache_kwargs)

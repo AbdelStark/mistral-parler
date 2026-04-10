@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -198,6 +199,32 @@ class TestProcessCommand:
         assert "1.23" in result.output
         mock_orchestrator.assert_not_called()
 
+    def test_process_local_cost_estimate_uses_zero_cost_without_audio_ingest(self) -> None:
+        runner = CliRunner()
+        captured_overrides: dict[str, object] = {}
+
+        def fake_load_config(
+            *, config_path: Path | None = None, overrides: dict[str, object] | None = None
+        ) -> ParlerConfig:
+            del config_path
+            captured_overrides.update(overrides or {})
+            return make_config()
+
+        with (
+            patch("parler.cli.load_config", side_effect=fake_load_config),
+            patch("parler.cli.AudioIngester") as mock_ingester,
+            patch("parler.cli.PipelineOrchestrator") as mock_orchestrator,
+        ):
+            result = runner.invoke(cli, ["process", "meeting.mp3", "--local", "--cost-estimate"])
+
+        assert result.exit_code == 0
+        assert "Estimated total cost: $0.00 (local inference)" in result.output
+        assert captured_overrides["api_key"] == "local-mode"
+        assert str(captured_overrides["transcription.model"]).startswith("local:")
+        assert str(captured_overrides["extraction.model"]).startswith("local:")
+        mock_ingester.assert_not_called()
+        mock_orchestrator.assert_not_called()
+
     def test_process_records_run_artifacts(self) -> None:
         runner = CliRunner()
         state = make_state(decision_log=make_decision_log(), report="# Decision Log\n")
@@ -230,6 +257,66 @@ class TestProcessCommand:
             assert "stage_started" in events
             assert "run_completed" in events
 
+    def test_process_verbose_logs_pipeline_context_to_stderr(self) -> None:
+        runner = CliRunner(mix_stderr=False)
+        state = make_state(
+            transcript=make_transcript(),
+            decision_log=make_decision_log(),
+            report="# Decision Log\n",
+        )
+
+        def fake_run(*args, **kwargs):
+            del args
+            for stage in (
+                PipelineStage.INGEST,
+                PipelineStage.TRANSCRIBE,
+                PipelineStage.ATTRIBUTE,
+                PipelineStage.EXTRACT,
+                PipelineStage.RENDER,
+            ):
+                kwargs["on_stage_start"](stage)
+                kwargs["on_stage_complete"](stage, 0.25)
+            return state
+
+        with runner.isolated_filesystem():
+            with (
+                patch("parler.cli.load_config", return_value=make_config()),
+                patch("parler.cli.PipelineOrchestrator") as mock_orchestrator,
+            ):
+                mock_orchestrator.return_value.run.side_effect = fake_run
+                result = runner.invoke(cli, ["process", "meeting.mp3", "--verbose"])
+
+            assert result.exit_code == 0
+            output_path = Path(result.stdout.strip())
+            assert output_path.name == "meeting-decisions.md"
+            assert output_path.exists()
+            assert (
+                "[verbose] command=process input=meeting.mp3 format=markdown "
+                "checkpoint=- resume=no execution=remote"
+            ) in result.stderr
+            assert (
+                "[verbose] models transcription=voxtral-mini-latest "
+                "extraction=mistral-medium-latest"
+            ) in result.stderr
+            assert "[verbose] trace_id=" in result.stderr
+            assert "[verbose] ingest: meeting.mp3 (probe input and normalize audio)" in result.stderr
+            assert (
+                "[verbose] transcribe: model=voxtral-mini-latest languages=auto cache=on"
+            ) in result.stderr
+            assert "[verbose] attribute: participants=0 anonymize=no" in result.stderr
+            assert (
+                "[verbose] extract: model=mistral-medium-latest prompt=v1.0 "
+                "meeting_date=unspecified cache=on"
+            ) in result.stderr
+            assert "[verbose] render: format=markdown" in result.stderr
+            assert "[verbose] transcript=segments=1 language=fr detected=fr model=-" in result.stderr
+            assert (
+                "[verbose] decision_log=decisions=1 commitments=1 questions=0 "
+                "rejected=0 model=mistral-large-latest"
+            ) in result.stderr
+            assert "[verbose] report_bytes=" in result.stderr
+            assert f"[verbose] wrote_output={output_path}" in result.stderr
+
 
 class TestTranscribeCommand:
     def test_transcribe_json_output_contains_transcript_not_decisions(self, tmp_path: Path) -> None:
@@ -251,6 +338,56 @@ class TestTranscribeCommand:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         assert payload["text"] == "Bonjour."
         assert "decisions" not in payload
+
+    def test_transcribe_verbose_logs_resume_details_to_stderr(self) -> None:
+        runner = CliRunner(mix_stderr=False)
+        state = replace(
+            make_state(transcript=make_transcript()),
+            completed_stages=frozenset({PipelineStage.INGEST, PipelineStage.TRANSCRIBE}),
+            checkpoint_path=Path(".parler-state.json"),
+        )
+
+        def fake_run(*args, **kwargs):
+            del args
+            kwargs["on_stage_start"](PipelineStage.INGEST)
+            kwargs["on_stage_complete"](PipelineStage.INGEST, 0.25)
+            return state
+
+        with runner.isolated_filesystem():
+            with (
+                patch("parler.cli.load_config", return_value=make_config()),
+                patch("parler.cli.PipelineOrchestrator") as mock_orchestrator,
+            ):
+                mock_orchestrator.return_value.run.side_effect = fake_run
+                result = runner.invoke(
+                    cli,
+                    [
+                        "transcribe",
+                        "meeting.mp3",
+                        "--resume",
+                        "--verbose",
+                        "--output",
+                        "transcript.txt",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            assert result.stdout.strip() == "transcript.txt"
+            assert Path("transcript.txt").read_text(encoding="utf-8") == "Bonjour."
+            assert (
+                "[verbose] command=transcribe input=meeting.mp3 format=text "
+                "checkpoint=auto (.parler-state.json) resume=yes execution=remote"
+            ) in result.stderr
+            assert (
+                "[verbose] model transcription=voxtral-mini-latest "
+                "languages=auto cache_dir=.parler-cache"
+            ) in result.stderr
+            assert "[verbose] trace_id=" in result.stderr
+            assert "[verbose] ingest: meeting.mp3 (probe input and normalize audio)" in result.stderr
+            assert "[verbose] ingest: complete in 0.25s" in result.stderr
+            assert "[verbose] reused completed stages from checkpoint: transcribe" in result.stderr
+            assert "[verbose] transcript=segments=1 language=fr detected=fr model=-" in result.stderr
+            assert "[verbose] wrote_output=transcript.txt" in result.stderr
 
 
 class TestExtractAndReportCommands:

@@ -12,14 +12,13 @@ These tests verify that the extraction layer:
 All HTTP calls are mocked. No real API key required.
 """
 
-import pytest
 import json
-from unittest.mock import patch, MagicMock, call
 from datetime import date
-from parler.extraction.extractor import DecisionExtractor
-from parler.models import Transcript, TranscriptSegment, DecisionLog
-from parler.errors import APIError
+from unittest.mock import MagicMock, patch
 
+import pytest
+from parler.extraction.extractor import DecisionExtractor
+from parler.models import DecisionLog, Transcript, TranscriptSegment
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -100,6 +99,135 @@ def many_segment_transcript():
         text=" ".join(segment.text for segment in segments),
         language="en",
         duration_s=250.0,
+        segments=segments,
+    )
+
+
+@pytest.fixture
+def explicit_local_recovery_transcript():
+    segments = (
+        TranscriptSegment(
+            id=0,
+            start_s=0.0,
+            end_s=5.0,
+            text="Bonjour à tous, nous allons commencer la réunion d'aujourd'hui.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=1,
+            start_s=5.0,
+            end_s=10.0,
+            text="Du coup, Antoine, est-ce que tu peux t'en charger ?",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=2,
+            start_s=10.0,
+            end_s=15.0,
+            text="Oui, je vais m'en charger.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=3,
+            start_s=15.0,
+            end_s=20.0,
+            text="À quelle date nous lançons la phase de test ?",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=4,
+            start_s=20.0,
+            end_s=25.0,
+            text="Et la deuxième question, quand est-ce que nous déclenchons la phase de lancement ?",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=5,
+            start_s=25.0,
+            end_s=30.0,
+            text="Il avait été également considéré de stopper le développement une fois le lancement.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=6,
+            start_s=30.0,
+            end_s=35.0,
+            text="Nous rejetons cette décision.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=7,
+            start_s=35.0,
+            end_s=40.0,
+            text="Nous allons donc continuer le développement après la phase de lancement.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+        TranscriptSegment(
+            id=8,
+            start_s=40.0,
+            end_s=45.0,
+            text="Et enfin, la dernière décision du conseil est que nous allons établir une réunion hebdomadaire pour consulter l'avancement du projet jusqu'à la phase de lancement.",
+            language="fr",
+            speaker_id=None,
+            speaker_confidence=None,
+            confidence=0.9,
+            no_speech_prob=0.01,
+            code_switch=False,
+            words=None,
+        ),
+    )
+    return Transcript(
+        text=" ".join(segment.text for segment in segments),
+        language="fr",
+        duration_s=45.0,
         segments=segments,
     )
 
@@ -213,6 +341,135 @@ class TestSinglePassExtraction:
         call_args = mock_instance.chat.complete.call_args
         prompt_str = str(call_args)
         assert "Segment 0 content here." in prompt_str or "Segment" in prompt_str
+
+    def test_extract_local_model_uses_hugging_face_runtime(self, short_transcript):
+        with (
+            patch("parler.extraction.extractor.LocalVoxtralRuntime") as MockRuntime,
+            patch("parler.extraction.extractor.MistralClient") as MockClient,
+        ):
+            MockRuntime.return_value.generate_text.return_value = json.dumps(
+                make_extraction_response(
+                    decisions=[
+                        {
+                            "id": "D1",
+                            "summary": "Launch in May",
+                            "confidence": "high",
+                            "language": "fr",
+                            "quote": "On lance en mai.",
+                            "timestamp_s": 10.0,
+                            "speaker": "Pierre",
+                            "confirmed_by": [],
+                        }
+                    ]
+                )
+            )
+            extractor = DecisionExtractor(
+                api_key="ignored-in-local-mode",
+                model="local:mistralai/Voxtral-Mini-3B-2507",
+            )
+            result = extractor.extract(short_transcript, meeting_date=date(2026, 4, 9))
+
+        MockClient.assert_not_called()
+        MockRuntime.return_value.generate_text.assert_called_once()
+        assert isinstance(result, DecisionLog)
+        assert result.decisions[0].summary == "Launch in May"
+        assert result.metadata.model == "local:mistralai/Voxtral-Mini-3B-2507"
+
+    def test_extract_local_model_parses_code_fenced_json(self, short_transcript):
+        fenced_payload = {
+            "decisions": [
+                {
+                    "decision": "Launch in May",
+                    "confidence": "high",
+                    "language": "fr",
+                    "quote": "On lance en mai.",
+                }
+            ],
+            "commitments": [
+                {
+                    "owner": "Pierre",
+                    "action": "Prepare the launch checklist",
+                    "confidence": "high",
+                    "language": "fr",
+                    "quote": "Je prépare la checklist de lancement.",
+                }
+            ],
+            "rejected": [],
+            "open_questions": [],
+        }
+        with (
+            patch("parler.extraction.extractor.LocalVoxtralRuntime") as MockRuntime,
+            patch("parler.extraction.extractor.MistralClient") as MockClient,
+        ):
+            MockRuntime.return_value.generate_text.return_value = (
+                "```json\n" + json.dumps(fenced_payload) + "\n```"
+            )
+            extractor = DecisionExtractor(
+                api_key="ignored-in-local-mode",
+                model="local:mistralai/Voxtral-Mini-3B-2507",
+            )
+            result = extractor.extract(short_transcript, meeting_date=date(2026, 4, 9))
+
+        MockClient.assert_not_called()
+        assert isinstance(result, DecisionLog)
+        assert len(result.decisions) == 1
+        assert result.decisions[0].summary == "Launch in May"
+        assert len(result.commitments) == 1
+        assert result.commitments[0].owner == "Pierre"
+
+    def test_extract_local_model_recovers_explicit_items_from_transcript(
+        self, explicit_local_recovery_transcript
+    ):
+        sparse_payload = {
+            "decisions": [
+                {
+                    "summary": "Reject decision to stop development after launch",
+                    "quote": "Nous rejetons cette décision. Nous allons donc continuer le développement après la phase de lancement.",
+                    "confidence": "high",
+                    "language": "fr",
+                }
+            ],
+            "commitments": [],
+            "rejected": [],
+            "open_questions": [],
+        }
+        with (
+            patch("parler.extraction.extractor.LocalVoxtralRuntime") as MockRuntime,
+            patch("parler.extraction.extractor.MistralClient") as MockClient,
+        ):
+            MockRuntime.return_value.generate_text.return_value = (
+                "```json\n" + json.dumps(sparse_payload) + "\n```"
+            )
+            extractor = DecisionExtractor(
+                api_key="ignored-in-local-mode",
+                model="local:mistralai/Voxtral-Mini-3B-2507",
+            )
+            result = extractor.extract(
+                explicit_local_recovery_transcript,
+                meeting_date=date(2026, 4, 9),
+                participants=["Pierre", "Sophie"],
+            )
+
+        MockClient.assert_not_called()
+        assert len(result.decisions) >= 2
+        assert any(
+            "continuer le développement après la phase de lancement" in item.summary
+            for item in result.decisions
+        )
+        assert any("réunion hebdomadaire" in item.summary for item in result.decisions)
+        assert len(result.commitments) == 1
+        assert result.commitments[0].owner == "Antoine"
+        assert "je vais m'en charger" in result.commitments[0].action.lower()
+        assert len(result.rejected) == 1
+        assert len(result.open_questions) == 2
+        assert any(
+            item.question == "À quelle date nous lançons la phase de test ?"
+            for item in result.open_questions
+        )
+        assert any(
+            "quand est-ce que nous déclenchons la phase de lancement ?" in item.question.lower()
+            for item in result.open_questions
+        )
 
 
 # ─── Multi-pass extraction ────────────────────────────────────────────────────

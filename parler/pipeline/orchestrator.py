@@ -14,6 +14,7 @@ from ..config import ParlerConfig
 from ..errors import ProcessingError
 from ..extraction.cache import ExtractionCache
 from ..extraction.extractor import DecisionExtractor
+from ..local import is_local_model
 from ..models import AudioFile
 from ..rendering.renderer import OutputFormat, RenderConfig, ReportRenderer
 from ..transcription.cache import TranscriptCache
@@ -48,12 +49,15 @@ def _match_pricing(model: str, table: dict[str, T], default: T) -> T:
 
 def estimate_cost(audio_file: AudioFile, config: ParlerConfig) -> float:
     minutes = max(audio_file.duration_s / 60.0, 0.0)
-    transcription_price_per_minute = _match_pricing(
-        config.transcription.model,
-        _TRANSCRIPTION_PRICING_PER_MINUTE,
-        _DEFAULT_TRANSCRIPTION_PRICE_PER_MINUTE,
-    )
-    transcription_cost = minutes * transcription_price_per_minute
+    if is_local_model(config.transcription.model):
+        transcription_cost = 0.0
+    else:
+        transcription_price_per_minute = _match_pricing(
+            config.transcription.model,
+            _TRANSCRIPTION_PRICING_PER_MINUTE,
+            _DEFAULT_TRANSCRIPTION_PRICE_PER_MINUTE,
+        )
+        transcription_cost = minutes * transcription_price_per_minute
 
     estimated_input_tokens = max(
         math.ceil(minutes * _CONSERVATIVE_TRANSCRIPT_INPUT_TOKENS_PER_MINUTE),
@@ -69,14 +73,17 @@ def estimate_cost(audio_file: AudioFile, config: ParlerConfig) -> float:
         config.extraction.max_tokens,
         _CONSERVATIVE_EXTRACTION_OUTPUT_TOKENS_PER_PASS,
     )
-    input_price_per_million, output_price_per_million = _match_pricing(
-        config.extraction.model,
-        _TEXT_MODEL_PRICING_PER_MILLION,
-        (_DEFAULT_TEXT_INPUT_PRICE_PER_MILLION, _DEFAULT_TEXT_OUTPUT_PRICE_PER_MILLION),
-    )
-    extraction_cost = (priced_input_tokens / 1_000_000) * input_price_per_million + (
-        priced_output_tokens / 1_000_000
-    ) * output_price_per_million
+    if is_local_model(config.extraction.model):
+        extraction_cost = 0.0
+    else:
+        input_price_per_million, output_price_per_million = _match_pricing(
+            config.extraction.model,
+            _TEXT_MODEL_PRICING_PER_MILLION,
+            (_DEFAULT_TEXT_INPUT_PRICE_PER_MILLION, _DEFAULT_TEXT_OUTPUT_PRICE_PER_MILLION),
+        )
+        extraction_cost = (priced_input_tokens / 1_000_000) * input_price_per_million + (
+            priced_output_tokens / 1_000_000
+        ) * output_price_per_million
     return round(transcription_cost + extraction_cost, 4)
 
 

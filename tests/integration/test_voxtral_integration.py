@@ -14,14 +14,13 @@ All external HTTP calls are mocked via pytest-httpx or responses library.
 No real API key required. No network access.
 """
 
-import pytest
-from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
 from pathlib import Path
-from parler.transcription.transcriber import VoxtralTranscriber
-from parler.models import AudioFile, TranscriptSegment, Transcript
-from parler.errors import APIError
+from unittest.mock import MagicMock, patch
 
+import pytest
+from parler.errors import APIError
+from parler.models import AudioFile, Transcript, TranscriptSegment
+from parler.transcription.transcriber import VoxtralTranscriber
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -205,6 +204,30 @@ class TestBasicTranscription:
 
         assert result.duration_s == pytest.approx(600.0)
 
+    def test_transcribe_local_model_uses_hugging_face_runtime(self, mock_audio_file):
+        with (
+            patch("parler.transcription.transcriber.LocalVoxtralRuntime") as MockRuntime,
+            patch("parler.transcription.transcriber.MistralClient") as MockClient,
+        ):
+            MockRuntime.return_value.transcribe_file.return_value = (
+                "Bonjour tout le monde. La reunion commence."
+            )
+            transcriber = VoxtralTranscriber(
+                api_key="ignored-in-local-mode",
+                model="local:mistralai/Voxtral-Mini-3B-2507",
+            )
+            result = transcriber.transcribe(mock_audio_file, languages=["fr"])
+
+        MockClient.assert_not_called()
+        MockRuntime.return_value.transcribe_file.assert_called_once_with(
+            mock_audio_file.path,
+            language="fr",
+        )
+        assert result.language == "fr"
+        assert result.model == "local:mistralai/Voxtral-Mini-3B-2507"
+        assert result.content_hash == mock_audio_file.content_hash
+        assert len(result.segments) == 2
+
 
 # ─── Chunking ────────────────────────────────────────────────────────────────
 
@@ -243,7 +266,7 @@ class TestChunking:
             transcriber = VoxtralTranscriber(
                 api_key="test-key", model="voxtral-v1-5", max_chunk_s=600
             )
-            result = transcriber.transcribe(long_audio)
+            transcriber.transcribe(long_audio)
 
         assert mock_instance.audio.transcriptions.create.call_count == 3
 
