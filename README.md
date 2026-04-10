@@ -1,272 +1,256 @@
-# parler
+<div align="center">
 
-`parler` is a local-first Python CLI, library, and Textual TUI that turns
-recorded multilingual meeting audio into a structured decision log with
-transcription, speaker attribution, commitments, rejected options, and
-render-ready output.
+# parler 🇫🇷
 
-**Status as of 2026-04-10: alpha.** The end-to-end pipeline, CLI, cache/state
-flows, and TUI are implemented and test-backed. It is suitable for local,
-operator-driven analysis of recorded meetings and verification fixtures. It is
-not yet suitable for unattended production ingestion, multi-tenant deployment,
-or compliance-sensitive workflows. Known limitations are listed below.
+**Turn recorded meetings into structured decision logs.**
 
-## Why it exists
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://python.org)
+[![uv](https://img.shields.io/badge/built%20with-uv-7c3aed)](https://docs.astral.sh/uv/)
+[![Voxtral](https://img.shields.io/badge/speech--to--text-Voxtral-f97316)](https://mistral.ai)
+[![Mistral](https://img.shields.io/badge/extraction-Mistral-ef4444)](https://mistral.ai)
+[![PyPI](https://img.shields.io/pypi/v/parler?label=pypi)](https://pypi.org/project/parler/)
 
-Most meeting tools stop at transcript or summary. `parler` is aimed at the
-higher-value artifact: an explicit record of what was decided, what was
-rejected, who owns follow-up, and when commitments are due, with strong support
-for French and mixed French/English meetings.
+*Voxtral transcribes. Mistral extracts. parler delivers decisions, commitments, and reports — in French and beyond.*
 
-## Who it is for
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/assets/img/tui-2.png" alt="Studio tab — pipeline in flight"/><br/>
+      <sub>Studio — live pipeline run, two-model stage strip, real-time progress</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/assets/img/tui-1.png" alt="Results tab — decision log"/><br/>
+      <sub>Results — structured decision log with decisions, commitments, and run metadata</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/assets/img/tui-4.png" alt="Artifacts tab — file tree and cache browser"/><br/>
+      <sub>Artifacts — project file tree and local cache entry browser</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/assets/img/tui-3.png" alt="About tab — capability reference"/><br/>
+      <sub>About — capability table, pipeline stage legend, and keyboard shortcuts</sub>
+    </td>
+  </tr>
+</table>
 
-- Developers building decision-intelligence workflows on top of Mistral/Voxtral
-- Operators who want a local CLI/TUI for replayable meeting analysis
-- Researchers evaluating multilingual meeting intelligence on realistic fixtures
+</div>
 
-`parler` is currently a batch tool. It is not a long-running service.
+---
 
-## Quickstart
+## How it works
 
-```bash
-uv python install
-uv sync --locked --group dev
-cp .env.example .env
+```mermaid
+flowchart LR
+    A["🎙️ Audio\nmp3 · wav · m4a\nflac · ogg · aac"]
+
+    subgraph pipeline ["  parler pipeline  "]
+        direction LR
+        B["Ingest\nprobe & normalize"]
+        C["Transcribe\n✦ Voxtral"]
+        D["Attribute\nspeaker labels"]
+        E["Extract\n✦ Mistral"]
+        F["Render\nMarkdown · HTML · JSON"]
+    end
+
+    G["📄 Decision Log\ndecisions · commitments\nquestions · rejected"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
-Edit `.env` and set `MISTRAL_API_KEY`. The CLI, TUI, and local E2E runner now
-auto-load `.env` from the current project root.
+Two AI models power the pipeline:
 
-Validate configuration and run a first fixture:
+| Stage | Model | What it does |
+|---|---|---|
+| **Transcribe** | Voxtral (`voxtral-mini-latest` / `voxtral-small-latest`) | Multilingual speech-to-text with timestamps |
+| **Extract** | Mistral (`mistral-medium-latest` / `mistral-large-latest`) | Structured JSON extraction of decisions, commitments, open questions, and rejected options |
+
+Every run writes a local checkpoint. Re-render or re-extract at any time — no API call required.
+
+---
+
+## Quick start
+
+**1. Install**
+
+```bash
+git clone https://github.com/AbdelStark/parler && cd parler
+uv sync --locked --group dev
+cp .env.example .env          # add MISTRAL_API_KEY=sk-...
+```
+
+**2. Validate**
 
 ```bash
 uv run parler doctor
-uv run parler config validate
+```
 
-uv run parler process \
-  tests/fixtures/audio/fr_meeting_5min.mp3 \
+```
+✓ API key      MISTRAL_API_KEY found
+✓ Config       parler.toml readable
+✓ Artifacts    .parler-cache · .parler-runs writable
+✓ FFmpeg       ffprobe available
+```
+
+**3. Run**
+
+```bash
+uv run parler process tests/fixtures/audio/fr_meeting_5min.mp3 \
   --lang fr \
   --participant Pierre \
   --participant Sophie \
   --meeting-date 2026-04-09
 ```
 
-Launch the TUI:
-
-```bash
-uv run parler tui
+```
+fr_meeting_5min-decisions.md
 ```
 
-The TUI boots with `tests/fixtures/audio/fr_meeting_5min.mp3` preloaded so a
-full French decision-extraction run works immediately, while the five committed
-VoxPopuli FR clips remain selectable from the left rail for real-audio
-transcription demos.
+---
 
-Run the local live-E2E helper:
+## Core usage
 
-```bash
-uv run parler-e2e
-```
-
-## Core workflows
-
-Inspect the CLI surface:
+### Full pipeline → decision report
 
 ```bash
-uv run parler --help
+uv run parler process meeting.mp3 \
+  --lang fr,en \
+  --participant Pierre \
+  --participant Alice \
+  --output decisions.md
 ```
 
-Check local readiness before a live run:
+- `--lang` — expected language codes; auto-detected if omitted
+- `--participant` — known speaker name; repeat for each person
+- `--output` — destination path; extension sets the format (`.md` / `.html` / `.json`)
 
-```bash
-uv run parler doctor
-```
-
-Transcribe only:
+### Transcription only
 
 ```bash
 uv run parler transcribe meeting.mp3 --format json --output transcript.json
 ```
 
-Run the full pipeline:
-
-```bash
-uv run parler process meeting.mp3 --lang fr,en --output meeting-decisions.md
-```
-
-Render from an existing checkpoint without re-calling APIs:
+### Re-render from checkpoint — zero API cost
 
 ```bash
 uv run parler report --from-state .parler-state.json --format html --output report.html
 ```
 
-Re-extract from a saved checkpoint:
+### Interactive TUI cockpit
 
 ```bash
-uv run parler extract --from-state .parler-state.json --format json
+uv run parler tui
 ```
 
-Inspect local cache entries:
+Boots with a synthetic French demo preloaded. Press `Ctrl+R` to run the full pipeline immediately, or pick a real VoxPopuli FR clip from the sidebar.
+
+---
+
+## What the output looks like
+
+```markdown
+# Decision Log
+
+Meeting: 2026-04-09  ·  Languages: fr  ·  Generated by: parler · mistral-medium-latest · v0.1.0
+
+## Decisions (1)
+
+| ID | Summary                                             | Owner  | Timestamp | Confidence |
+|----|-----------------------------------------------------|--------|-----------|------------|
+| D1 | On part sur le 15 mai pour le lancement. C'est décidé. | Pierre | 03:42 | high |
+
+## Commitments (2)
+
+| ID | Owner  | Action                          | Deadline   | Confidence |
+|----|--------|---------------------------------|------------|------------|
+| C1 | Sophie | Préparer la démo technique      | 2026-04-12 | high       |
+| C2 | Pierre | Envoyer l'invite à l'équipe     | 2026-04-10 | medium     |
+```
+
+---
+
+## Configuration
+
+### Environment
+
+| Variable | Description |
+|---|---|
+| `MISTRAL_API_KEY` | Mistral API key (loaded automatically from `.env`) |
+| `PARLER_API_KEY` | Alias — either variable works |
+
+### CLI flags — `parler process`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--lang` | auto | Language codes — `fr`, `en`, `fr,en` |
+| `--participant` | — | Known speaker name (repeat per person) |
+| `--format` | `markdown` | Output format: `markdown` · `html` · `json` |
+| `--output` | `<stem>-decisions.md` | Output file path |
+| `--checkpoint` | `.parler-state.json` | Checkpoint file for resume |
+| `--resume` | off | Resume from an existing checkpoint |
+| `--transcribe-only` | off | Stop after transcription stage |
+| `--no-diarize` | off | Skip speaker attribution |
+| `--anonymize-speakers` | off | Replace names in all outputs |
+| `--cost-estimate` | off | Print estimate and exit — no API calls |
+
+### `parler.toml`
+
+```toml
+[transcription]
+model    = "voxtral-mini-latest"    # voxtral-small-latest for higher accuracy
+languages = ["fr"]
+
+[extraction]
+model = "mistral-medium-latest"     # mistral-large-latest for harder meetings
+
+[cache]
+directory = ".parler-cache"
+
+[cost]
+max_usd = 2.00                      # abort if preflight estimate exceeds this
+```
+
+---
+
+## Other commands
 
 ```bash
+# Estimate spend before any API call
+uv run parler process meeting.mp3 --cost-estimate
+
+# Inspect cache
 uv run parler cache list
 uv run parler cache show <key>
 uv run parler cache clear --yes
-```
 
-Inspect recorded run artifacts:
-
-```bash
+# Inspect run traces
 uv run parler runs list
-uv run parler runs show <trace_id> --json
-```
+uv run parler runs show <trace_id>
 
-Prune stale local artifacts:
-
-```bash
+# Prune stale artifacts
 uv run parler cleanup --older-than-days 7
-uv run parler cleanup --temp-audio --older-than-days 1
 ```
 
-Estimate spend before the first billable stage:
+---
+
+## Development
 
 ```bash
-uv run parler process meeting.mp3 --cost-estimate
-```
-
-The cost estimate is intentionally conservative. It uses current built-in price
-assumptions for the supported Mistral/Voxtral models and the configured
-extraction limits. Treat it as a safety rail, not as billing truth.
-
-## What the repository contains
-
-The canonical product, design, testing, and delivery contracts live in:
-
-- [SPEC.md](./SPEC.md)
-- [SDD.md](./SDD.md)
-- [TESTING.md](./TESTING.md)
-- [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
-
-Historical component records remain in [rfcs/](./rfcs/), but `SPEC.md` and
-`SDD.md` win when documents drift.
-
-## Architecture overview
-
-The runtime package lives under [`parler/`](./parler):
-
-- `audio/`: input validation, probing, and FFmpeg-backed normalization
-- `transcription/`: Voxtral adapter, chunk assembly, quality checks, transcript cache
-- `attribution/`: speaker resolution and anonymization rules
-- `extraction/`: deadline resolution, parsing, cache, and Mistral extraction adapter
-- `rendering/`: canonical Markdown/HTML/JSON report generation
-- `export/`: isolated Notion/Linear/Jira/Slack adapter surfaces
-- `pipeline/`: orchestration, checkpointing, resumability, and cost gating
-- `tui/`: the Textual showcase application
-- `util/`: hashing, serialization, env loading, retry, and language helpers
-
-High-level flow:
-
-1. Ingest audio and normalize format if needed
-2. Transcribe via Voxtral
-3. Resolve speakers conservatively
-4. Extract structured decisions and commitments
-5. Render Markdown/HTML/JSON
-6. Optionally export to downstream systems
-
-Every `process`, `transcribe`, and TUI-driven run now records a local artifact
-bundle under `.parler-runs/<trace_id>/` with a `run.json` summary and
-`events.jsonl` stage stream. These bundles are local operator artifacts and are
-ignored by git.
-
-## Testing and verification
-
-Fast local verification:
-
-```bash
+# Fast verification slice
 uv run pytest tests/unit tests/integration tests/property -q
-uv run ruff check parler tests/smoke_test.py
-uv run ruff format --check parler tests/smoke_test.py
+
+# Full quality gate
+uv run ruff check parler
 uv run mypy parler/
 uv build
 ```
 
-Targeted project-backed slice used in CI:
+See [SPEC.md](./SPEC.md), [SDD.md](./SDD.md), and [TESTING.md](./TESTING.md) for the canonical contracts.
 
-```bash
-uv run pytest \
-  tests/unit/test_config_loading.py \
-  tests/unit/test_pipeline_config_compat.py \
-  tests/unit/test_cli_commands.py \
-  tests/unit/test_e2e_runner.py \
-  tests/unit/test_report_rendering.py \
-  tests/unit/test_pipeline_orchestration.py \
-  tests/unit/test_audio_ingestion.py \
-  tests/unit/test_chunk_assembly.py \
-  tests/unit/test_transcript_quality.py \
-  tests/unit/test_speaker_attribution.py \
-  tests/unit/test_decision_extraction_parsing.py \
-  tests/unit/test_deadline_resolution.py \
-  tests/unit/test_deadline_resolution_parametrized.py \
-  tests/integration/test_retry_behavior.py \
-  tests/integration/test_voxtral_integration.py \
-  tests/integration/test_cache_behavior.py \
-  tests/integration/test_mistral_extraction.py \
-  tests/integration/test_export_integrations.py \
-  tests/property/test_deadline_resolver_properties.py \
-  tests/property/test_parsing_properties.py \
-  -q
-```
-
-For detailed test-layer guidance, see [tests/README.md](./tests/README.md) and
-[TESTING.md](./TESTING.md).
-
-## Fixtures and dataset provenance
-
-Deterministic golden tests still rely on synthetic fixtures generated from
-scripted content under [`tests/fixtures/`](./tests/fixtures).
-
-The repository also includes a small set of public French clips derived from the
-[VoxPopuli](https://github.com/facebookresearch/voxpopuli) dataset
-(*VoxPopuli: A Large-Scale Multilingual Speech Corpus for Representation
-Learning, Semi-Supervised Learning and Interpretation*). The original source
-recording and derived clip metadata are kept under
-[`tests/fixtures/audio/`](./tests/fixtures/audio/). These clips are present for
-manual demos and TUI workflows, not as deterministic contract goldens.
-
-## Security and local-data handling
-
-- `.env`, caches, and checkpoints are local-only artifacts and are ignored by git
-- `.parler-runs/` stores per-run trace bundles for local troubleshooting and is ignored by git
-- checkpoints may contain transcript text and decision content; treat them as sensitive
-- checkpoint/cache JSON writes use restrictive permissions where the host OS allows
-- run summaries and event streams use the same atomic/restrictive local write discipline
-- resume now rejects incomplete or mismatched checkpoints instead of continuing in an incoherent state
-- no real customer recordings, transcripts, or secrets should be committed to the repository
-
-## Current limitations
-
-- The project is still alpha and uses live vendor APIs for the transcription and extraction path
-- Cost estimation is conservative and model-price dependent; verify pricing before relying on it operationally
-- Export adapters are thin integration surfaces, not full sync engines
-- There is no deployment/runbook surface for multi-user or server operation because this is not yet a service
-- FFmpeg-backed normalization uses temporary local artifacts; cleanup is manual via `parler cleanup`
-- CI validates the implemented slice, not every future-facing draft in `tests/` and `features/`
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md). In short:
-
-- use `uv`
-- keep changes traceable to `SPEC.md`, `SDD.md`, and `TESTING.md`
-- prefer narrow, test-backed vertical slices
-- do not commit secrets, real recordings, caches, or checkpoints
-
-## Help and project status
-
-- Issues: <https://github.com/AbdelStark/parler/issues>
-- Changelog: [CHANGELOG.md](./CHANGELOG.md)
-- Release automation: [`.github/workflows/publish.yml`](./.github/workflows/publish.yml)
+---
 
 ## License
 
-MIT
+[MIT](LICENSE)
