@@ -1270,6 +1270,7 @@ class ParlerTUIApp(App[None]):
                 else "Press [bold]Ctrl+R[/bold] to run."
             )
             self.query_one("#run-summary", Static).update(
+                "[bold]Ready to run.[/bold]\n"
                 f"[bold]{request.input_path.name}[/bold]\n"
                 f"[dim]Mode[/dim]  {mode}  [dim]·[/dim]  "
                 f"[dim]Lang[/dim]  {languages}  [dim]·[/dim]  "

@@ -345,6 +345,28 @@ class TestRetryBehaviour:
         # Should have called exactly once (no retry on 401)
         assert mock_instance.audio.transcriptions.create.call_count == 1
 
+    def test_request_file_handle_closed_when_transcription_call_fails(self, mock_audio_file):
+        file_content = MagicMock()
+        file_content.close = MagicMock()
+        file_arg = MagicMock(content=file_content)
+
+        with (
+            patch("parler.transcription.transcriber.MistralClient") as MockClient,
+            patch.object(VoxtralTranscriber, "_file_argument", return_value=file_arg),
+            patch("time.sleep"),
+        ):
+            mock_instance = MockClient.return_value
+            mock_instance.audio.transcriptions.create.side_effect = ConnectionError("network down")
+            transcriber = VoxtralTranscriber(
+                api_key="test-key",
+                model="voxtral-v1-5",
+                max_retries=0,
+            )
+            with pytest.raises(APIError, match="network down"):
+                transcriber.transcribe(mock_audio_file)
+
+        file_content.close.assert_called_once()
+
 
 # ─── Cache integration ────────────────────────────────────────────────────────
 

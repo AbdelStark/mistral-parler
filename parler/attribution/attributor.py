@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from typing import Final, Literal
@@ -10,6 +11,7 @@ from ..models import Transcript
 from .resolver import SpeakerResolver, format_human_name, normalize_speaker_token
 
 SpeakerConfidence = Literal["high", "medium", "low", "unknown"]
+logger = logging.getLogger(__name__)
 _NAME_TRAILING_FILLERS: Final[frozenset[str]] = frozenset({"and", "et"})
 
 _SELF_INTRO_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
@@ -283,4 +285,5 @@ class SpeakerAttributor:
             )
             return replace(transcript, segments=segments)
         except Exception:
+            logger.exception("Speaker attribution failed; falling back to Unknown labels")
             return self._fallback_unknown(transcript)

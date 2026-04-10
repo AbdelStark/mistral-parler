@@ -231,6 +231,17 @@ class TestMalformedResponses:
         log = parse_extraction_response(None, meeting_date=date(2026, 4, 9))
         assert log.is_empty
 
+    def test_unexpected_parser_error_surfaces_warning_metadata(self, monkeypatch):
+        def explode(raw):
+            del raw
+            raise TypeError("boom")
+
+        monkeypatch.setattr("parler.extraction.parser._coerce_items", explode)
+        log = parse_extraction_response(EMPTY_RESPONSE, meeting_date=date(2026, 4, 9))
+
+        assert log.is_empty
+        assert log.metadata.parse_warnings == ("parser failed: TypeError",)
+
     def test_live_variant_schema_is_parsed(self):
         log = parse_extraction_response(
             LIVE_VARIANT_RESPONSE,

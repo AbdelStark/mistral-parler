@@ -357,6 +357,21 @@ class TestCheckpointSaveResume:
                     resume=True,
                 )
 
+    def test_resume_rejects_unreadable_checkpoint_json(self, parler_config, tmp_path):
+        """Corrupt checkpoint JSON must fail with a typed ProcessingError."""
+        checkpoint_path = tmp_path / ".parler-state.json"
+        checkpoint_path.write_text("{not valid json", encoding="utf-8")
+
+        with patch("parler.pipeline.orchestrator.AudioIngester") as MockIngester:
+            MockIngester.return_value.ingest.return_value = make_audio_file()
+            orchestrator = PipelineOrchestrator(parler_config)
+            with pytest.raises(ProcessingError, match="checkpoint is unreadable"):
+                orchestrator.run(
+                    Path("/tmp/meeting.mp3"),
+                    checkpoint_path=checkpoint_path,
+                    resume=True,
+                )
+
     def test_resume_with_wrong_audio_hash_raises(self, parler_config, tmp_path):
         """Resuming with a different audio file (different hash) should raise an error."""
         checkpoint_path = tmp_path / ".parler-state.json"

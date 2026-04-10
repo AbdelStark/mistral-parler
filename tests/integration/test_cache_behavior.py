@@ -170,6 +170,15 @@ class TestTranscriptCache:
         result = cache.get(content_hash="old123", model="voxtral-v1-5")
         assert result is None
 
+    def test_corrupt_transcript_cache_entry_treated_as_miss(self, tmp_path):
+        cache = TranscriptCache(cache_dir=tmp_path)
+        transcript = make_transcript()
+        path = cache.store(content_hash="broken123", model="voxtral-v1-5", transcript=transcript)
+        path.write_text("{not valid json", encoding="utf-8")
+
+        result = cache.get(content_hash="broken123", model="voxtral-v1-5")
+        assert result is None
+
 
 # ─── ExtractionCache ─────────────────────────────────────────────────────────
 
@@ -219,3 +228,12 @@ class TestExtractionCache:
         assert result.decisions[0].confidence == "high"
         assert result.metadata.model == "mistral-large-latest"
         assert result.metadata.meeting_date == date(2026, 4, 9)
+
+    def test_corrupt_extraction_cache_entry_treated_as_miss(self, tmp_path):
+        cache = ExtractionCache(cache_dir=tmp_path)
+        log = make_decision_log()
+        path = cache.store(transcript_hash="broken_log", prompt_version="v1.0.0", log=log)
+        path.write_text("{not valid json", encoding="utf-8")
+
+        result = cache.get(transcript_hash="broken_log", prompt_version="v1.0.0")
+        assert result is None

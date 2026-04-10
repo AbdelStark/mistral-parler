@@ -266,7 +266,14 @@ def load_processing_state(
     audio_file: AudioFile | None = None,
     expected_audio_hash: str | None = None,
 ) -> ProcessingState:
-    raw = read_json(checkpoint_path)
+    try:
+        raw = read_json(checkpoint_path)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ProcessingError(f"checkpoint is unreadable: {checkpoint_path.name}") from exc
+    if not isinstance(raw, dict):
+        raise ProcessingError(
+            f"checkpoint is unreadable: {checkpoint_path.name} must contain a JSON object"
+        )
     checkpoint_hash = raw.get("audio_hash")
     if expected_audio_hash is not None:
         if not checkpoint_hash:
@@ -276,7 +283,16 @@ def load_processing_state(
         if checkpoint_hash != expected_audio_hash:
             raise ProcessingError("checkpoint audio changed or mismatch detected")
 
-    state = processing_state_from_dict(raw, audio_file=audio_file, checkpoint_path=checkpoint_path)
+    try:
+        state = processing_state_from_dict(
+            raw,
+            audio_file=audio_file,
+            checkpoint_path=checkpoint_path,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProcessingError(
+            f"checkpoint is unreadable: invalid payload in {checkpoint_path.name}"
+        ) from exc
     _validate_resumable_state(state)
     return state
 

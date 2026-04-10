@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from ..models import Transcript, TranscriptSegment
 from ..util.hashing import stable_fingerprint
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
+
+logger = logging.getLogger(__name__)
 
 
 def build_transcript_cache_key(
@@ -85,8 +88,17 @@ class TranscriptCache:
             age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
             if age > timedelta(days=self.ttl_days):
                 return None
-        raw = read_json(path)
-        return _transcript_from_dict(raw["transcript"])
+        try:
+            raw = read_json(path)
+            if not isinstance(raw, dict):
+                raise ValueError("cache payload must be a JSON object")
+            transcript = raw["transcript"]
+            if not isinstance(transcript, dict):
+                raise ValueError("cache payload is missing transcript data")
+            return _transcript_from_dict(transcript)
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            logger.warning("Ignoring unreadable transcript cache entry %s: %s", path.name, exc)
+            return None
 
     def store(
         self, content_hash: str, model: str, transcript: Transcript, **fingerprint_kwargs: Any

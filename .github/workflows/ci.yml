@@ -67,6 +67,7 @@ jobs:
           tests/unit/test_pipeline_config_compat.py
           tests/unit/test_cli_commands.py
           tests/unit/test_e2e_runner.py
+          tests/unit/test_tui_app.py
           tests/unit/test_report_rendering.py
           tests/unit/test_pipeline_orchestration.py
           tests/unit/test_audio_ingestion.py

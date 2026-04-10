@@ -476,7 +476,9 @@ def parse_extraction_response(
                 ),
             )
         )
-    except Exception:
+    except Exception as exc:
+        warning = f"parser failed: {type(exc).__name__}"
+        logger.exception("Failed to parse extraction response into a decision log")
         return _empty_log(
             meeting_date=meeting_date,
             model=model,
@@ -485,6 +487,7 @@ def parse_extraction_response(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             pass_count=pass_count,
+            parse_warnings=(warning,),
         )
 
 

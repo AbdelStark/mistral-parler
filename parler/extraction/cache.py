@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from ..models import (
 )
 from ..util.hashing import stable_fingerprint
 from ..util.serialization import read_json, to_jsonable, write_json_atomic
+
+logger = logging.getLogger(__name__)
 
 
 def build_extraction_cache_key(
@@ -152,8 +155,17 @@ class ExtractionCache:
         path = self._path_for(transcript_hash, prompt_version, **fingerprint_kwargs)
         if not path.exists():
             return None
-        raw = read_json(path)
-        return _log_from_dict(raw["decision_log"])
+        try:
+            raw = read_json(path)
+            if not isinstance(raw, dict):
+                raise ValueError("cache payload must be a JSON object")
+            decision_log = raw["decision_log"]
+            if not isinstance(decision_log, dict):
+                raise ValueError("cache payload is missing decision log data")
+            return _log_from_dict(decision_log)
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            logger.warning("Ignoring unreadable extraction cache entry %s: %s", path.name, exc)
+            return None
 
     def store(
         self, transcript_hash: str, prompt_version: str, log: DecisionLog, **fingerprint_kwargs: Any

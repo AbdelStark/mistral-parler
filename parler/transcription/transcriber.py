@@ -312,19 +312,19 @@ class VoxtralTranscriber:
         chunk: _ChunkSpec,
     ) -> RawVoxtralChunkResponse:
         def request() -> object:
+            kwargs = self._request_kwargs(audio_file, languages=languages, chunk=chunk)
+            create = self._client.audio.transcriptions.create
+            file_arg = kwargs.get("file")
+            content = getattr(file_arg, "content", None)
             try:
-                kwargs = self._request_kwargs(audio_file, languages=languages, chunk=chunk)
-                create = self._client.audio.transcriptions.create
-                response = create(**_filter_supported_kwargs(create, kwargs))
-                file_arg = kwargs.get("file")
-                content = getattr(file_arg, "content", None)
-                if hasattr(content, "close"):
-                    cast(Any, content).close()
-                return response
+                return create(**_filter_supported_kwargs(create, kwargs))
             except APIStatusError as exc:
                 if is_retriable_http_status(exc.status_code):
                     raise
                 raise self._translate_api_error(exc) from exc
+            finally:
+                if hasattr(content, "close"):
+                    cast(Any, content).close()
 
         retriable_exceptions: list[type[BaseException]] = [
             APIStatusError,

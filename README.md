@@ -71,6 +71,18 @@ Every run writes a local checkpoint. Re-render or re-extract at any time — no 
 
 ---
 
+## Status
+
+As of 2026-04-10, `parler` is **alpha**. It is suitable for local, operator-driven processing of recorded meetings where a human reviews the generated decision log before acting on it. It is not yet suitable for unattended production workflows, automatic third-party mutations, or “set and forget” compliance use.
+
+Known limitations today:
+
+- Speaker attribution is heuristic and may conservatively fall back to `Unknown`.
+- Live E2E verification depends on local fixtures, `ffmpeg`/`ffprobe`, and a valid `MISTRAL_API_KEY`.
+- Export adapters shape payloads, but operational retry, idempotency, and rollback guarantees are still intentionally thin.
+
+---
+
 ## Quick start
 
 **1. Install**
@@ -145,6 +157,8 @@ uv run parler tui
 ```
 
 Boots with a synthetic French demo preloaded. Press `Ctrl+R` to run the full pipeline immediately, or pick a real VoxPopuli FR clip from the sidebar.
+
+Some of the sample audio files used by `parler` were generated from clips in the Meta AI Research [VoxPopuli](https://github.com/facebookresearch/voxpopuli) dataset.
 
 ---
 
@@ -246,8 +260,6 @@ uv run ruff check parler
 uv run mypy parler/
 uv build
 ```
-
-See [SPEC.md](./SPEC.md), [SDD.md](./SDD.md), and [TESTING.md](./TESTING.md) for the canonical contracts.
 
 ---
 
