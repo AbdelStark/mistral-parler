@@ -4,10 +4,38 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
-import numpy as np
 from parler.local.voxtral import LocalVoxtralRuntime
+
+
+class _FakeArray:
+    def __init__(self, data: Any) -> None:
+        self._data = data
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        if isinstance(self._data, list):
+            if self._data and isinstance(self._data[0], list):
+                return (len(self._data), len(self._data[0]))
+            return (len(self._data),)
+        return ()
+
+    def __getitem__(self, key: object) -> Any:
+        if not isinstance(key, tuple):
+            return self._data[key]
+
+        rows, cols = key
+        selected_rows = self._data[rows]
+        if isinstance(rows, int):
+            return _FakeArray(selected_rows[cols])
+        return _FakeArray([row[cols] for row in selected_rows])
+
+
+def _array(data: Any, *, dtype: object | None = None) -> _FakeArray:
+    del dtype
+    return _FakeArray(data)
 
 
 class _FakeTorch:
@@ -27,20 +55,20 @@ class _FakeProcessor:
         assert kwargs["sampling_rate"] == 16_000
         assert kwargs["format"] == ["wav"]
         waveform = kwargs["audio"]
-        assert isinstance(waveform, np.ndarray)
+        assert isinstance(waveform, _FakeArray)
         return _FakeInputs()
 
     @staticmethod
     def batch_decode(predicted_ids: object, *, skip_special_tokens: bool) -> list[str]:
         assert skip_special_tokens is True
-        assert isinstance(predicted_ids, np.ndarray)
+        assert isinstance(predicted_ids, _FakeArray)
         return ["Bonjour tout le monde."]
 
 
 class _FakeInputs(dict[str, object]):
     def __init__(self) -> None:
         super().__init__(
-            input_ids=np.array([[11, 12]]),
+            input_ids=_array([[11, 12]]),
             input_features="fake-features",
         )
         self.input_ids = self["input_ids"]
@@ -54,8 +82,8 @@ class _FakeInputs(dict[str, object]):
 class _FakeTextInputs(dict[str, object]):
     def __init__(self) -> None:
         super().__init__(
-            input_ids=np.array([[11, 12]]),
-            attention_mask=np.array([[1, 1]]),
+            input_ids=_array([[11, 12]]),
+            attention_mask=_array([[1, 1]]),
         )
         self.input_ids = self["input_ids"]
 
@@ -98,15 +126,15 @@ class _FakeModel:
         return None
 
     @staticmethod
-    def generate(**kwargs: object) -> np.ndarray:
-        assert isinstance(kwargs["input_ids"], np.ndarray)
+    def generate(**kwargs: object) -> _FakeArray:
+        assert isinstance(kwargs["input_ids"], _FakeArray)
         if "input_features" in kwargs:
             assert kwargs["input_features"] == "fake-features"
             assert kwargs["max_new_tokens"] == 500
         else:
             assert kwargs["max_new_tokens"] == 64
         assert kwargs["do_sample"] is False
-        return np.array([[11, 12, 1, 2, 3]])
+        return _array([[11, 12, 1, 2, 3]])
 
 
 def test_transcribe_file_uses_transcription_request_and_generate() -> None:
@@ -116,7 +144,7 @@ def test_transcribe_file_uses_transcription_request_and_generate() -> None:
         patch("parler.local.voxtral._ensure_local_transcription_dependencies"),
         patch(
             "parler.local.voxtral._load_audio_waveform",
-            return_value=np.array([0.1, -0.1], dtype=np.float32),
+            return_value=_array([0.1, -0.1], dtype="float32"),
         ),
     ):
         runtime = LocalVoxtralRuntime("mistralai/Voxtral-Mini-3B-2507")
@@ -125,7 +153,7 @@ def test_transcribe_file_uses_transcription_request_and_generate() -> None:
     assert result == "Bonjour tout le monde."
     assert len(processor.calls) == 1
     waveform = processor.calls[0]["audio"]
-    assert isinstance(waveform, np.ndarray)
+    assert isinstance(waveform, _FakeArray)
 
 
 def test_generate_text_falls_back_to_plain_tokenizer_when_chat_template_missing() -> None:
