@@ -9,6 +9,9 @@ history.
 
 ### Added
 
+- An optional hosted-processing entry point with verified-workspace Longplay access
+  admission; the local CLI/TUI retains its existing independent behaviour.
+
 - A first-class Textual TUI (`parler tui` / `parler-tui`) with fixture presets,
   live stage progress, cache browsing, transcript/report preview, and result
   tables.

@@ -316,3 +316,30 @@ uv build
 ## License
 
 [MIT](LICENSE)
+
+## Optional hosted processing boundary
+
+`parler.hosted.run_hosted_pipeline` is a narrow hosted-control-plane entry point
+for #5. It calls the existing pipeline only after the host authenticates a workspace
+and Longplay confirms its current access Feature. Local CLI/TUI usage does not
+import or enable this integration and gains no new billing dependency.
+
+The host supplies `require_workspace`: a server-side callback that verifies its
+account session and workspace membership. Returning a workspace ID from a request
+body or cookie is insufficient. It also supplies a configured Longplay Python
+server client (explicit API origin, App, sandbox/live environment, Server Key and
+bounded timeout) and an access Feature UUID. Public SDK installation is documented
+at https://longplayai.com/sdk/python; pin the approved release in the hosted service.
+
+The billing identity is `parler:workspace:<verified-workspace>`. Audio, filenames,
+transcripts, pipeline configuration and Mistral keys never go to Longplay. Every run
+gets a fresh check before the pipeline opens audio or starts model work; denial,
+revocation, malformed results and billing errors never invoke processing.
+
+This is an access boundary, not hosted authentication, account/workspace storage,
+a monthly allowance, duration metering or checkout. Only access Features qualify;
+checking a credit balance would not reserve spend. The host must supply its approved
+account/plan model, privacy boundaries, file ownership and purchase/management flow.
+Existing pipeline cost caps, state/checkpoints, caches and processing stay unchanged.
+
+Offline admission regression tests: `python -m unittest tests/unit/test_hosted_access.py`.
